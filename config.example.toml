@@ -1,0 +1,76 @@
+# 硅基流动 TTS 示例配置
+#
+# 用法（二选一）：
+#   1) 在 MaiBot WebUI 的插件配置页直接改（推荐，Runner 会写回同一份 config.toml）；
+#   2) 把本文件复制到插件根目录并改名为 config.toml：
+#        cp config.example.toml config.toml
+#      config.toml 已在 .gitignore 里，不会进仓库。
+#
+# 安全红线：不要把真实 API Key 写进任何会提交的文件。
+# 推荐保持 api_key = ""，改用环境变量 SILICONFLOW_API_KEY（见 README「配置」一节）。
+
+[plugin]
+config_version = "1.0.0"
+
+# 总开关：false 时回复扩展直接放行原消息（纯文字）
+enabled = true
+
+# 硅基流动 API Key。
+# 留空 = 读环境变量 SILICONFLOW_API_KEY（Docker 部署推荐）。
+# 只有占位示例，真实 key 请勿提交：  api_key = "sk-xxxx"
+api_key = ""
+
+# API 根地址；指向自建反代时改这里，结尾不要带 /
+base_url = "https://api.siliconflow.cn/v1"
+
+# ── 模型与音色 ────────────────────────────────────────────────
+# 实测（docs/VERIFY.md §5.1）：验证账号下 FunAudioLLM/CosyVoice2-0.5B 会挂起 60–180s、0 字节；
+# fnlp/MOSS-TTSD-v0.5 正常（0.5–1.2s）。所以示例用 MOSS。
+# 如果你的账号 CosyVoice2 可用，可改回：
+#   model = "FunAudioLLM/CosyVoice2-0.5B"
+#   voice = "FunAudioLLM/CosyVoice2-0.5B:alex"
+model = "fnlp/MOSS-TTSD-v0.5"
+voice = "fnlp/MOSS-TTSD-v0.5:anna"
+
+# 音色写法：
+#   1) "模型:音色名"                —— 系统音色，如 fnlp/MOSS-TTSD-v0.5:anna
+#   2) 只写音色名                  —— 自动补成 "当前模型:音色名"，如 anna
+#   3) "speech:name:id:hash"      —— /tts clone 克隆出的音色 uri，原样填，不要补模型前缀
+# voice = "speech:my-voice:xxxx:yyyy"
+
+# 语速 [0.25, 4.0]；增益 dB [-10, 10]
+speed = 1.0
+gain = 0.0
+
+# ── 音频格式 ──────────────────────────────────────────────────
+# mp3 默认可用：QQ 服务端会自动把 mp3 转成 SILK，插件不需要 ffmpeg/silk 转码（docs/VERIFY.md R1）。
+# 合法采样率：mp3 → 32000/44100；wav → 8000/16000/24000/32000/44100；opus → 48000
+response_format = "mp3"
+sample_rate = 44100
+
+# ── 回复行为 ──────────────────────────────────────────────────
+# 语音之外是否保留文字；Planner 调用时可用 keep_text 参数覆盖
+keep_text = true
+
+# 占位开关：true 目前不会自动生效（ReplyExtension 需 Planner 主动选；Hook 注入见 PLAN R8）
+auto_voice = false
+
+# 单次合成文本上限（按句边界截断）。
+# 实测：>约 500 字时音频在 ~163s 饱和、尾部不朗读；建议保持 300（≈97s）。
+max_chars = 300
+
+# 回复扩展超时（毫秒）；provider 实际超时会压到 ≤55s，避免被 Host 先掐断
+timeout_ms = 60000
+
+# 429/5xx 重试次数
+retry = 2
+
+# ── 缓存（同一句第二次 0 请求，实测 3 次调用 = 1 次 HTTP）────────
+cache_enabled = true
+cache_ttl_hours = 72
+cache_max_mb = 200
+
+# ── 失败策略 ──────────────────────────────────────────────────
+# text = 降级为纯文字（推荐，绝不让语音失败拖垮整条回复）
+# fail = 让本次回复失败（仅联调用）
+fallback_on_error = "text"
