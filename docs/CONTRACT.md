@@ -21,7 +21,7 @@
 | SDK 区间 | `min_version=2.14.0` / `max_version=999.999.999` |
 | 能力声明 | `send.hybrid`、`config.get` |
 | 回复扩展组件名 | **`voice`**，完整命名空间 `local.siliconflow-tts.voice`（Host 拼接） |
-| 配置模型类 | `config.SiliconFlowTTSConfig`（`PluginConfigBase` 子类，**扁平单层**，不嵌套 section） |
+| 配置模型类 | `config.SiliconFlowTTSConfig`（外层）+ `config.SiliconFlowTTSSection`（`[plugin]` 段，19 字段）；对外仍暴露 `self.config.speed` 等转发属性 —— **不可用扁平顶层写法**，见 §3.1 订正 |
 | 插件类 | `plugin.SiliconFlowTTSPlugin`（`MaiBotPlugin` 子类），入口 `create_plugin()` |
 | 必实现生命周期 | `on_load()` / `on_unload()` / `on_config_update(scope, config_data, version)` |
 | 数据目录 | `self.ctx.paths.data_dir`（= `<MaiBot>/data/plugins/local.siliconflow-tts`），**不自己拼路径** |
@@ -182,14 +182,25 @@ python -m json.tool _manifest.json > /dev/null && echo OK
 
 ### 3.1 `config.py`
 
+> **⚠️ v1.1 订正（t3 实测，SDK/Runner 2.16.0）**
+>
+> 本节原写「扁平单层、`config_version` 放顶层」，**这是错的**。Runner 的
+> `extract_plugin_config_version()` 只认 `{"plugin": {"config_version": ...}}`；
+> 缺失时抛 `PluginConfigVersionError`，而 `_apply_plugin_config(suppress_errors=False)`
+> 会把它直接抛出 → **插件加载失败**。
+>
+> 正确写法：`config.toml` 用标准 `[plugin]` 段（19 字段全在段内，`config_version` 必填），
+> 外层模型用**只读转发属性**维持契约冻结的 `self.config.speed` / `self.config.enabled` 访问面，
+> 下游模块无需感知嵌套。实际实现见 `config.py`。
+
 ```python
 from typing import Literal
 
 from maibot_sdk import Field, PluginConfigBase
 
 
-class SiliconFlowTTSConfig(PluginConfigBase):
-    """硅基流动 TTS 插件配置（扁平单层，字段见 §4）。"""
+class SiliconFlowTTSSection(PluginConfigBase):
+    """``config.toml`` 的 ``[plugin]`` 段（字段见 §4）。"""
 
     __ui_label__ = "硅基流动 TTS"
 
@@ -442,7 +453,8 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
 
 ## 4. 配置模型字段表（= PLAN 第 5 节，逐项对齐）
 
-`config.py` 只声明一个类 `SiliconFlowTTSConfig(PluginConfigBase)`，**扁平单层**（`self.config.speed`，不是 `self.config.plugin.speed`）。
+`config.py` 声明两个类：外层 `SiliconFlowTTSConfig(PluginConfigBase)` + 内部 `[plugin]` 段 `SiliconFlowTTSSection(PluginConfigBase)`。
+下方 19 个字段**全部位于 `[plugin]` 段内**；外层用只读转发属性维持 `self.config.speed` 的访问面（不是 `self.config.plugin.speed`，也**不是**扁平顶层——扁平顶层会让插件加载失败，见 §3.1 订正）。
 Runner 依据它生成 `config.toml` 与 WebUI Schema，并自动补齐缺失字段。
 
 | # | 键 | 类型 | 默认 | 约束 | 说明（PLAN §5） |
@@ -458,7 +470,7 @@ Runner 依据它生成 `config.toml` 与 WebUI Schema，并自动补齐缺失字
 | 8 | `response_format` | `Literal` | `"mp3"` | `mp3`/`wav`/`opus` | 输出格式 |
 | 9 | `sample_rate` | `int` | `44100` | 见 §8.3，非法值回落默认 | 采样率 |
 | 10 | `keep_text` | `bool` | `true` | — | 语音之外是否保留原文字 |
-| 11 | `auto_voice` | `bool` | `false` | — | true 时回复默认带语音，无需 Planner 选参数 |
+| 11 | `auto_voice` | `bool` | `false` | — | **占位**：ReplyExtension 无法强制参与，M2 由 Hook 注入 options 才生效（PLAN R8） |
 | 12 | `max_chars` | `int` | `300` | `≥ 1` | 超长截断（按句边界，见 §3.4） |
 | 13 | `timeout_ms` | `int` | `60000` | `≥ 1000` | 与 `@ReplyExtension(timeout_ms=)` 对齐 |
 | 14 | `retry` | `int` | `2` | `0 ≤ x ≤ 5` | 429/5xx 重试次数 |
@@ -470,9 +482,10 @@ Runner 依据它生成 `config.toml` 与 WebUI Schema，并自动补齐缺失字
 字段顺序即 WebUI 展示顺序（与上表一致）。`Field` 只用 `default` / `ge` / `le` / `description` / `json_schema_extra`，
 不要写自定义 validator（Runner 的 Schema 生成器只认 Pydantic 标准元数据）。
 
-`config.toml` 形态（Runner 生成，供排错对照）：
+`config.toml` 形态（Runner 生成，供排错对照）——**必须有 `[plugin]` 段**，平铺会加载失败：
 
 ```toml
+[plugin]
 config_version = "1.0.0"
 enabled = true
 api_key = ""
