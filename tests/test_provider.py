@@ -356,8 +356,8 @@ def test_settings_from_config_fills_defaults(provider_module, monkeypatch):
 
     assert settings.api_key == ""
     assert settings.base_url == provider_module.DEFAULT_BASE_URL
-    assert settings.model == "FunAudioLLM/CosyVoice2-0.5B"
-    assert settings.voice == "FunAudioLLM/CosyVoice2-0.5B:FunAudioLLM/CosyVoice2-0.5B"
+    assert settings.model == "fnlp/MOSS-TTSD-v0.5"
+    assert settings.voice == "fnlp/MOSS-TTSD-v0.5:fnlp/MOSS-TTSD-v0.5"
     assert settings.response_format == "mp3"
     assert settings.sample_rate == 44100
     assert settings.retry == 2

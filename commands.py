@@ -85,7 +85,7 @@ MAX_IN_USE_OPTIONS = 10
 FORCE_FLAGS: tuple[str, ...] = ("--force", "-f")
 
 #: 没有其他克隆音色时建议切回的系统音色
-DEFAULT_SYSTEM_VOICE_HINT = "FunAudioLLM/CosyVoice2-0.5B:alex"
+DEFAULT_SYSTEM_VOICE_HINT = "fnlp/MOSS-TTSD-v0.5:anna"
 
 #: ``voice.py`` 未就绪时的兜底规则（正常路径从 voice 模块读取）
 _FALLBACK_SUFFIXES: tuple[str, ...] = (".mp3", ".wav", ".pcm", ".opus")
@@ -440,7 +440,7 @@ async def handle_voice_list(
             "\n".join(
                 (
                     "⚠️ 还没有克隆音色。",
-                    "系统音色：直接在配置 voice 里写「模型:音色名」（如 FunAudioLLM/CosyVoice2-0.5B:alex）。",
+                    "系统音色：直接在配置 voice 里写「模型:音色名」（如 fnlp/MOSS-TTSD-v0.5:anna）。",
                     "克隆音色：把参考音频放进 voices/ 目录，然后 /tts clone <名称> <文件名> <参考文本>。",
                 )
             ),

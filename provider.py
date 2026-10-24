@@ -38,7 +38,7 @@ __all__ = [
 
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_TIMEOUT = 60.0
-DEFAULT_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
+DEFAULT_MODEL = "fnlp/MOSS-TTSD-v0.5"
 USER_AGENT = "maibot-plugin-siliconflow-tts/0.1.0"
 
 SPEECH_PATH = "/audio/speech"
