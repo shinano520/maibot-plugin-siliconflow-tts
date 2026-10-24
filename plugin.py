@@ -1,5 +1,8 @@
 """硅基流动 TTS 插件入口：装配 + 三个生命周期 + ``voice`` 回复扩展 + ``/tts`` 命令组。
 
+v1.2 起命令组包含音色克隆（``/tts clone``、``/tts voice list|del|rm``）；
+音色 HTTP 细节全部在 ``voice.py``，本文件只提供 ``voice_dir`` 并转交调用。
+
 职责边界（PLAN §4.3）：
 
 - 本插件**绝不替主程序发送回复**：回复正文只在 ``before_send`` 阶段被改写，
@@ -42,6 +45,9 @@ if TYPE_CHECKING:  # pragma: no cover - 仅用于类型标注
 #: ``min(config.timeout_ms/1000, MAX_PROVIDER_TIMEOUT_SECONDS)`` 以免被 Host 先掐断。
 DEFAULT_EXTENSION_TIMEOUT_MS = 60000
 MAX_PROVIDER_TIMEOUT_SECONDS = 55.0
+
+#: 参考音频目录名：``<data_dir>/voices/``（CONTRACT §3.8，v1.2）
+VOICE_DIR_NAME = "voices"
 
 
 class EmptySpeechText(ValueError):
@@ -116,6 +122,22 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
             return configured
         return self.runtime_state.is_enabled(configured)
 
+    @property
+    def voice_dir(self) -> Path:
+        """音色参考音频目录：``self.ctx.paths.data_dir / "voices"``（CONTRACT §3.8）。"""
+
+        return Path(self.ctx.paths.data_dir) / VOICE_DIR_NAME
+
+    def _ensure_voice_dir(self, logger: logging.Logger) -> None:
+        """``on_load`` 时确保 ``voices/`` 存在；建不出来只告警，不阻断合成主链路。"""
+
+        try:
+            self.voice_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("创建音色参考音频目录失败：%s（/tts clone 将不可用）", self.voice_dir, exc_info=True)
+        else:
+            logger.info("音色参考音频目录：%s", self.voice_dir)
+
     # ── 生命周期（必须由子类覆盖，Runner 会校验）────────────────
     async def on_load(self) -> None:
         cfg = self.config
@@ -125,6 +147,7 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
         self.runtime_state = commands_module.RuntimeState.load(self.ctx.paths.data_dir)
 
         logger = self._logger()
+        self._ensure_voice_dir(logger)
         logger.info(
             "硅基流动 TTS 已加载：model=%s voice=%s format=%s/%sHz 缓存=%s 运行开关=%s 转码能力=%s",
             cfg.model,
@@ -354,9 +377,6 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
         result = await self.ctx.send.hybrid(segments, stream_id)
         return bool(result)
 
-    async def _list_voices(self) -> list[str]:
-        return await self._require_provider().list_voices(timeout=self._provider_timeout())
-
     def _config_summary(self) -> dict[str, Any]:
         """``/tts status`` 用的状态摘要（有序，便于直接渲染）。"""
 
@@ -418,11 +438,70 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
             enabled=self.is_enabled(),
         )
 
-    @Command("tts_voices", description="列出当前账号可用音色", pattern=commands_module.PATTERN_VOICES)
+    @Command("tts_voices", description="列出账号下可用音色（名称 — uri）", pattern=commands_module.PATTERN_VOICES)
     async def handle_tts_voices(self, **kwargs: Any) -> tuple[bool, str, int]:
-        return await commands_module.handle_voices(
+        return await commands_module.handle_voice_list(
             stream_id=str(kwargs.get("stream_id", "") or ""),
-            list_voices=self._list_voices,
+            provider=self.provider,
+            timeout=self._provider_timeout(),
+            send_text=self._send_text_via_hybrid,
+        )
+
+    @Command(
+        "tts_clone",
+        description="用 voices/ 目录下的参考音频克隆音色（operator）",
+        pattern=commands_module.PATTERN_CLONE,
+        permission="operator",
+    )
+    async def handle_tts_clone(self, **kwargs: Any) -> tuple[bool, str, int]:
+        return await commands_module.handle_clone(
+            stream_id=str(kwargs.get("stream_id", "") or ""),
+            name=self._matched(kwargs, "name"),
+            filename=self._matched(kwargs, "filename"),
+            reference_text=self._matched(kwargs, "reference_text"),
+            voice_dir=self.voice_dir,
+            provider=self.provider,
+            timeout=self._provider_timeout(),
+            send_text=self._send_text_via_hybrid,
+        )
+
+    @Command(
+        "tts_voice_list",
+        description="列出已克隆音色（与 /tts voices 同义）",
+        pattern=commands_module.PATTERN_VOICE_LIST,
+    )
+    async def handle_tts_voice_list(self, **kwargs: Any) -> tuple[bool, str, int]:
+        return await commands_module.handle_voice_list(
+            stream_id=str(kwargs.get("stream_id", "") or ""),
+            provider=self.provider,
+            timeout=self._provider_timeout(),
+            send_text=self._send_text_via_hybrid,
+        )
+
+    @Command(
+        "tts_voice_del",
+        description="删除克隆音色（名称或 uri，operator）",
+        pattern=commands_module.PATTERN_VOICE_DEL,
+        permission="operator",
+    )
+    async def handle_tts_voice_del(self, **kwargs: Any) -> tuple[bool, str, int]:
+        return await self._delete_voice(kwargs)
+
+    @Command(
+        "tts_voice_rm",
+        description="删除克隆音色（CONTRACT §3.9 的 rm 写法，operator）",
+        pattern=commands_module.PATTERN_VOICE_RM,
+        permission="operator",
+    )
+    async def handle_tts_voice_rm(self, **kwargs: Any) -> tuple[bool, str, int]:
+        return await self._delete_voice(kwargs)
+
+    async def _delete_voice(self, kwargs: dict[str, Any]) -> tuple[bool, str, int]:
+        return await commands_module.handle_voice_delete(
+            stream_id=str(kwargs.get("stream_id", "") or ""),
+            target=self._matched(kwargs, "target"),
+            provider=self.provider,
+            timeout=self._provider_timeout(),
             send_text=self._send_text_via_hybrid,
         )
 
