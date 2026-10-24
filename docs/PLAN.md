@@ -145,14 +145,14 @@ reply_ext.before_send  → text 转音频：
 | `enabled` | bool | `true` | 组件总开关 |
 | `api_key` | str | `""` | 硅基流动 key；**空则回落到环境变量 `SILICONFLOW_API_KEY`** |
 | `base_url` | str | `https://api.siliconflow.cn/v1` | 便于指向自建反代 |
-| `model` | str | `FunAudioLLM/CosyVoice2-0.5B` | |
-| `voice` | str | `FunAudioLLM/CosyVoice2-0.5B:alex` | 完整 `模型:音色`；也允许只写音色名，插件自动补齐 |
+| `model` | str | `fnlp/MOSS-TTSD-v0.5` | 实测 CosyVoice2 上游不可用，默认用 MOSS |
+| `voice` | str | `fnlp/MOSS-TTSD-v0.5:anna` | 完整 `模型:音色`；也允许只写音色名，插件自动补齐 |
 | `speed` | float | `1.0` | `[0.25, 4.0]` 校验 |
 | `gain` | float | `0.0` | `[-10, 10]` |
 | `response_format` | enum | `mp3` | `mp3`/`wav`/`opus` |
 | `sample_rate` | int | `44100` | 按格式校验合法值 |
 | `keep_text` | bool | `true` | 语音之外是否保留原文字 |
-| `auto_voice` | bool | `false` | **尽力而为，非强制**。ReplyExtension 只有在 Planner 主动填 `plugin_options` 时才会被调用，扩展自身无法让自己「总是参与」。故此项 M1 仅作配置占位，M2 由 Hook 在 reply 调用前注入 `plugin_options` 才真正生效 |
+| `auto_voice` | bool | `false` | **占位，当前版本不生效**：ReplyExtension 只有在 Planner 主动填 `plugin_options` 时才会被调用，扩展自身无法让自己「总是参与」；M2 由 Hook 在 reply 调用前注入 `plugin_options` 才真正生效（PLAN R8） |
 | `max_chars` | int | `300` | 超长截断（按 UTF-8 字节另算，见 6.3） |
 | `timeout_ms` | int | `60000` | 与 `@ReplyExtension(timeout_ms=)` 对齐 |
 | `retry` | int | `2` | 429/5xx 重试次数 |
@@ -160,6 +160,10 @@ reply_ext.before_send  → text 转音频：
 | `cache_ttl_hours` | int | `72` | 过期清理 |
 | `cache_max_mb` | int | `200` | 超限按 LRU 淘汰 |
 | `fallback_on_error` | enum | `text` | `text`=降级为纯文字；`fail`=让本次 reply 失败（调试用） |
+| `group_policy` | enum | `whitelist` | 群聊开关：`all`=全开、`whitelist`=仅群名单内、`blacklist`=名单外；**`whitelist` + 空列表 = 全关（刻意的安全默认）** |
+| `group_list` | list[str] | `[]` | 群号名单；允许脏输入，入库前归一化（`qq:` 前缀 / 全角数字 / 空白 / 逗号），一行一条 |
+| `private_policy` | enum | `whitelist` | 私聊开关：语义同 `group_policy`；**`whitelist` + 空列表 = 全关** |
+| `private_list` | list[str] | `[]` | 用户 QQ 号名单；同样支持脏输入归一化 |
 
 ---
 

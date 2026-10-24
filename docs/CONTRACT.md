@@ -19,6 +19,7 @@
 | v1.0 | 初版冻结：manifest、模块签名、19 字段配置表、消息协议 |
 | v1.1 | **配置结构订正**（t3 实测）：`config.toml` 必须用 `[plugin]` 段，扁平顶层会让插件加载失败；外层用转发属性维持 `self.config.speed` 访问面（§3.1/§4）。`auto_voice` 语义按 PLAN R8 修正 |
 | v1.2 | **本期范围扩展**：音色克隆（克隆/列表/删除）新增 `voice.py`；`voice` 配置接受克隆 uri；`provider.list_voices` 降级为兼容薄壳；新增 §12 密钥安全红线，`.gitignore` 扩容，同步 PLAN §7/§10/§11 |
+| v1.3 | **配置表补齐**：`[plugin]` 段新增 4 个语音开关字段（`group_policy`/`group_list`/`private_policy`/`private_list`，默认 `whitelist` + 空列表 = 全关），字段总数 19 → 23；`reply_ext` 新增 `normalize_peer_id` / `resolve_chat_peer` / `is_allowed` 三个纯函数签名；明确 `prepare` 与 `before_send` 两个 phase 都先过闸门（§3.7） |
 
 ---
 
@@ -32,7 +33,7 @@
 | SDK 区间 | `min_version=2.14.0` / `max_version=999.999.999` |
 | 能力声明 | `send.hybrid`、`config.get`（**音色克隆不新增能力**，理由见 §2.2） |
 | 回复扩展组件名 | **`voice`**，完整命名空间 `local.siliconflow-tts.voice`（Host 拼接） |
-| 配置模型类 | `config.SiliconFlowTTSConfig`（外层）+ `config.SiliconFlowTTSSection`（`[plugin]` 段，19 字段）；对外仍暴露 `self.config.speed` 等转发属性 —— **不可用扁平顶层写法**，见 §3.1 订正 |
+| 配置模型类 | `config.SiliconFlowTTSConfig`（外层）+ `config.SiliconFlowTTSSection`（`[plugin]` 段，23 字段）；对外仍暴露 `self.config.speed` 等转发属性 —— **不可用扁平顶层写法**，见 §3.1 订正 |
 | 插件类 | `plugin.SiliconFlowTTSPlugin`（`MaiBotPlugin` 子类），入口 `create_plugin()` |
 | 必实现生命周期 | `on_load()` / `on_unload()` / `on_config_update(scope, config_data, version)` |
 | 数据目录 | `self.ctx.paths.data_dir`（= `<MaiBot>/data/plugins/local.siliconflow-tts`），**不自己拼路径** |
@@ -229,7 +230,7 @@ python -m json.tool _manifest.json > /dev/null && echo OK
 > 缺失时抛 `PluginConfigVersionError`，而 `_apply_plugin_config(suppress_errors=False)`
 > 会把它直接抛出 → **插件加载失败**。
 >
-> 正确写法：`config.toml` 用标准 `[plugin]` 段（19 字段全在段内，`config_version` 必填），
+> 正确写法：`config.toml` 用标准 `[plugin]` 段（23 字段全在段内，`config_version` 必填），
 > 外层模型用**只读转发属性**维持契约冻结的 `self.config.speed` / `self.config.enabled` 访问面，
 > 下游模块无需感知嵌套。实际实现见 `config.py`。
 
@@ -575,6 +576,19 @@ def build_messages(
     keep_text: bool,
     quote_previous: bool,
 ) -> list[dict[str, object]]: ...
+
+# v1.3 新增：语音开关纯函数（与 config 的 group/private 策略配合）
+def normalize_peer_id(value: Any) -> str: ...                      # qq:/QQ： 前缀、全角数字、空白 → 纯数字串
+def resolve_chat_peer(chat: Any) -> tuple[bool, str] | None: ...   # (是否群聊, 群号/QQ号)；解不出返回 None
+def is_allowed(
+    *,
+    is_group: bool,
+    peer_id: Any,
+    group_policy: Any,
+    group_list: Any,
+    private_policy: Any,
+    private_list: Any,
+) -> bool: ...                                                     # all/whitelist/blacklist；未知策略 → False
 ```
 
 `plugin.py` 中的声明（冻结：组件名 `voice`、平台 `qq`、超时跟配置）：
@@ -599,6 +613,9 @@ async def reply_voice(self, *, phase, parameters, text, messages, **context) -> 
 - 处理器签名固定为关键字参数：`phase`、`parameters`、`text`、`messages`、`**context`。
 - `prepare` 返回 `{"extra_prompt": PREPARE_EXTRA_PROMPT}`；`before_send` 返回 `{"messages": [...]}`。
 - `parameters[ATTACH_VOICE_KEY]` 为 `False` 或插件 `enabled=False` → 返回 `{}`（完全放行）。
+- **两个 phase 都先过闸门（v1.3）**：`prepare` 与 `before_send` 均先过 `_voice_allowed(context)`
+  （实现 = `is_chat_allowed(...)`；`chat` 解不出、`is_group_chat` 非布尔、策略未知/异常一律拒绝）；
+  不通过则返回 `{}` **完全放行**——不注入 `extra_prompt`、不改消息。
 - 处理器内**禁止**调用 `self.ctx.send.*`（主程序统一发送，见 PLAN §4.3）。
 
 ### 3.8 `plugin.py` 装配面
@@ -647,7 +664,7 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
 ## 4. 配置模型字段表（= PLAN 第 5 节，逐项对齐）
 
 `config.py` 声明两个类：外层 `SiliconFlowTTSConfig(PluginConfigBase)` + 内部 `[plugin]` 段 `SiliconFlowTTSSection(PluginConfigBase)`。
-下方 19 个字段**全部位于 `[plugin]` 段内**；外层用只读转发属性维持 `self.config.speed` 的访问面（不是 `self.config.plugin.speed`，也**不是**扁平顶层——扁平顶层会让插件加载失败，见 §3.1 订正）。
+下方 23 个字段**全部位于 `[plugin]` 段内**；外层用只读转发属性维持 `self.config.speed` 的访问面（不是 `self.config.plugin.speed`，也**不是**扁平顶层——扁平顶层会让插件加载失败，见 §3.1 订正）。
 Runner 依据它生成 `config.toml` 与 WebUI Schema，并自动补齐缺失字段。
 
 | # | 键 | 类型 | 默认 | 约束 | 说明（PLAN §5） |
@@ -671,6 +688,10 @@ Runner 依据它生成 `config.toml` 与 WebUI Schema，并自动补齐缺失字
 | 16 | `cache_ttl_hours` | `int` | `72` | `≥ 0` | 过期清理，0=不过期 |
 | 17 | `cache_max_mb` | `int` | `200` | `≥ 0` | 超限 LRU，0=不限 |
 | 18 | `fallback_on_error` | `Literal` | `"text"` | `text`/`fail` | 失败降级策略 |
+| 19 | `group_policy` | `Literal` | `"whitelist"` | `all`/`whitelist`/`blacklist` | 群聊开关：`all`=全开、`whitelist`=仅群名单内、`blacklist`=名单外；**`whitelist` + 空列表 = 全关（刻意的安全默认）** |
+| 20 | `group_list` | `list[str]` | `[]` | 每项群号 | 群号名单；允许脏输入，入库前归一化（`qq:` 前缀 / 全角数字 / 空白 / 逗号），一行一条 |
+| 21 | `private_policy` | `Literal` | `"whitelist"` | `all`/`whitelist`/`blacklist` | 私聊开关：语义同 `group_policy`；**`whitelist` + 空列表 = 全关** |
+| 22 | `private_list` | `list[str]` | `[]` | 每项 QQ 号 | 用户 QQ 号名单；同样支持脏输入归一化（`qq:` 前缀 / 全角数字 / 空白 / 逗号） |
 
 字段顺序即 WebUI 展示顺序（与上表一致）。`Field` 只用 `default` / `ge` / `le` / `description` / `json_schema_extra`，
 不要写自定义 validator（Runner 的 Schema 生成器只认 Pydantic 标准元数据）。
@@ -683,8 +704,8 @@ config_version = "1.0.0"
 enabled = true
 api_key = ""
 base_url = "https://api.siliconflow.cn/v1"
-model = "FunAudioLLM/CosyVoice2-0.5B"
-voice = "FunAudioLLM/CosyVoice2-0.5B:alex"
+model = "fnlp/MOSS-TTSD-v0.5"
+voice = "fnlp/MOSS-TTSD-v0.5:anna"
 speed = 1.0
 gain = 0.0
 response_format = "mp3"
@@ -698,6 +719,11 @@ cache_enabled = true
 cache_ttl_hours = 72
 cache_max_mb = 200
 fallback_on_error = "text"
+# v1.3 语音开关：默认 whitelist + 空列表 = 全关
+group_policy = "whitelist"
+group_list = []
+private_policy = "whitelist"
+private_list = []
 ```
 
 使用克隆音色时只改一行：`voice = "speech:my-voice:xxx:yyyy"`（不需要动其他字段）。
@@ -968,7 +994,7 @@ def load_plugin_package() -> None:
 
 `plugin-dev`（`plugin.py` / `config.py` / `reply_ext.py` / `audio.py` / `commands.py`）：
 
-- [ ] `config_model = SiliconFlowTTSConfig`，19 字段全在 `[plugin]` 段，外层转发属性可用
+- [ ] `config_model = SiliconFlowTTSConfig`，23 字段全在 `[plugin]` 段，外层转发属性可用
 - [ ] `effective_voice`：纯音色名补前缀，`speech:` 或含 `:` 原样返回
 - [ ] 三个生命周期方法均覆盖且签名一致；`create_plugin()` 存在；`on_unload` 关闭 provider
 - [ ] `@ReplyExtension("voice", ..., platforms="qq")` 参数 Schema 与 §3.7 一致
