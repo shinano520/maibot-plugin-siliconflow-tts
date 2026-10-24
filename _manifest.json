@@ -1,0 +1,52 @@
+{
+  "manifest_version": 2,
+  "id": "local.siliconflow-tts",
+  "version": "0.1.0",
+  "name": "硅基流动语音合成",
+  "description": "让麦麦（MaiBot）把文字回复用硅基流动 TTS 合成 QQ 语音消息；可保留或替换原文字。",
+  "author": {
+    "name": "shinano520",
+    "url": "https://github.com/shinano520"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/shinano520/maibot-plugin-siliconflow-tts",
+    "homepage": "https://github.com/shinano520/maibot-plugin-siliconflow-tts",
+    "documentation": "https://github.com/shinano520/maibot-plugin-siliconflow-tts/blob/main/docs/CONTRACT.md",
+    "issues": "https://github.com/shinano520/maibot-plugin-siliconflow-tts/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "999.999.999"
+  },
+  "sdk": {
+    "min_version": "2.14.0",
+    "max_version": "999.999.999"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "httpx",
+      "version_spec": ">=0.27.0"
+    }
+  ],
+  "plugin_type": "provider",
+  "capabilities": [
+    "send.hybrid",
+    "config.get"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "display": {
+    "icon": {
+      "type": "lucide",
+      "value": "audio-lines",
+      "fallback": "music",
+      "background": "#1f2937"
+    }
+  }
+}
