@@ -4,19 +4,23 @@
 
 - ``ProviderError``：统一错误类型，``kind`` 取值
   ``config|auth|bad_request|rate_limit|server|network|timeout|empty``
+- ``redact_secret(text)``：把 ``sk-xxxxxxxx`` 脱敏成 ``sk-****``（契约 §12）
 - ``TTSSettings``（frozen dataclass）+ ``TTSSettings.from_config(cfg)``
-- ``SiliconFlowTTSProvider(settings)``：``synthesize`` / ``list_voices`` / ``aclose``
+- ``SiliconFlowTTSProvider(settings)``：``synthesize`` / ``request_json`` /
+  ``list_voices``（v1.2 兼容薄壳）/ ``aclose``
 - ``create_provider(cfg) -> SiliconFlowTTSProvider``
 
 约束：**不依赖 maibot_sdk**，只用 httpx，可被 pytest 直接测（可注入 MockTransport）。
+本模块是全仓库**唯一** ``import httpx`` 的地方：音色管理（``voice.py``）一律通过
+``request_json`` 复用这里的连接、鉴权与错误归一化。
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +33,7 @@ __all__ = [
     "SiliconFlowTTSProvider",
     "TTSSettings",
     "create_provider",
+    "redact_secret",
 ]
 
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
@@ -47,6 +52,9 @@ _MAX_ERROR_BODY = 300
 _MAX_RETRY_AFTER = 30.0
 #: 值得重试的 ``ProviderError.kind``。
 RETRYABLE_KINDS = frozenset({"rate_limit", "server", "timeout", "network"})
+
+#: 契约 §12：``sk-`` 开头的长串一律脱敏，展示用掩码固定 ``sk-****``。
+_SECRET_RE = re.compile(r"sk-[A-Za-z0-9]{8,}")
 
 
 class ProviderError(RuntimeError):
@@ -86,6 +94,17 @@ class ProviderError(RuntimeError):
             f"ProviderError(kind={self.kind!r}, status={self.status!r}, "
             f"message={str(self)!r})"
         )
+
+
+def redact_secret(text: str) -> str:
+    """把 ``sk-`` 开头的长串替换为 ``sk-****``；不改变其他内容。
+
+    契约 §12 冻结签名。匹配 ``sk-[A-Za-z0-9]{8,}``，展示用掩码固定为
+    ``sk-****``（不保留前后缀）。所有可能进日志/异常的字符串都要先过这里。
+    """
+    if not text:
+        return "" if text is None else str(text)
+    return _SECRET_RE.sub("sk-****", str(text))
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,35 +293,87 @@ class SiliconFlowTTSProvider:
         raise last_error
 
     # ------------------------------------------------------------------ #
-    # 音色列表
+    # 通用 JSON 调用（v1.2：音色管理走这里，不重复实现 HTTP）
     # ------------------------------------------------------------------ #
-    async def list_voices(self, *, timeout: float | None = None) -> list[str]:
-        """``GET {base_url}/audio/voice/list``，返回音色 ``uri`` 列表。"""
+    async def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, object] | None = None,
+        timeout: float | None = None,
+    ) -> object:
+        """带鉴权的 JSON 请求，返回解析后的原生对象（空体返回 ``None``）。
+
+        - ``path`` 以 ``/`` 开头（缺了自动补），拼 ``{base_url}{path}``；
+        - 2xx：解析 JSON 返回 ``dict``/``list``；**响应体不是 JSON 时**抛
+          ``ProviderError(kind="bad_request", status=2xx)`` —— 调用方据此区分
+          「HTTP 成功但内容不可解析」和真正的 HTTP 错误；
+        - 非 2xx：按 :meth:`_http_error` 归一化（401/403→auth、4xx→bad_request…）；
+        - **不套用重试**：音色管理是低频运维，失败让用户重试即可；
+          二进制合成不走这里（用 :meth:`synthesize`）。
+        """
         if not self.settings.api_key:
             raise ProviderError(
                 "未配置 api_key（config.api_key 或环境变量 SILICONFLOW_API_KEY）",
                 kind="config",
             )
+
+        verb = (method or "GET").strip().upper() or "GET"
+        endpoint = str(path or "/")
+        if not endpoint.startswith("/"):
+            endpoint = f"/{endpoint}"
         budget = _resolve_budget(timeout, self.settings.timeout)
+
+        kwargs: dict[str, Any] = {
+            "headers": self._auth_headers(accept="application/json"),
+            "timeout": budget,
+        }
+        if payload is not None:
+            kwargs["json"] = payload
+
         try:
-            response = await self.client.get(
-                self._url(VOICE_LIST_PATH),
-                headers=self._auth_headers(accept="application/json"),
-                timeout=budget,
+            response = await self.client.request(
+                verb, self._url(endpoint), **kwargs
             )
         except httpx.TimeoutException as exc:
             raise ProviderError(
-                f"获取音色列表超时：{type(exc).__name__}", kind="timeout"
+                f"{verb} {endpoint} 超时：{type(exc).__name__}", kind="timeout"
             ) from exc
         except httpx.TransportError as exc:
             raise ProviderError(
-                f"获取音色列表网络错误：{type(exc).__name__}: {self._scrub(str(exc))}",
+                f"{verb} {endpoint} 网络错误：{type(exc).__name__}: {self._scrub(str(exc))}",
                 kind="network",
             ) from exc
 
-        if response.status_code != 200:
+        if not 200 <= response.status_code < 300:
             raise self._http_error(response)
-        return self._extract_voices(response)
+
+        if not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError:
+            raise ProviderError(
+                f"{verb} {endpoint} 返回非 JSON（HTTP {response.status_code}）："
+                f"{self._body_text(response)}",
+                kind="bad_request",
+                status=response.status_code,
+            ) from None
+
+    # ------------------------------------------------------------------ #
+    # 音色列表（v1.2 兼容薄壳，v1.3 移除）
+    # ------------------------------------------------------------------ #
+    async def list_voices(self, *, timeout: float | None = None) -> list[str]:
+        """兼容薄壳：委托 :func:`voice.list_voices`，只取 ``uri`` 字符串。
+
+        保留它只为不打断已落地的 ``plugin.py`` 与既有测试；新代码一律用
+        ``voice.list_voices``（能拿到 ``VoiceProfile`` 的 name/model）。
+        """
+        from . import voice as voice_module  # 函数内懒导入，避免模块级循环依赖
+
+        profiles = await voice_module.list_voices(self, timeout=timeout)
+        return [profile.uri for profile in profiles]
 
     # ------------------------------------------------------------------ #
     # 内部
@@ -349,11 +420,13 @@ class SiliconFlowTTSProvider:
         return self._scrub(text[:_MAX_ERROR_BODY])
 
     def _scrub(self, text: str) -> str:
-        """脱敏：错误信息里绝不出现 ``api_key`` / ``Authorization``。"""
+        """脱敏：错误信息里绝不出现 ``api_key`` / ``Authorization`` 原文。"""
+        if not text:
+            return ""
         key = self.settings.api_key
         if key:
-            text = text.replace(key, "***")
-        return text.replace("Bearer ", "Bearer ***")
+            text = text.replace(key, "sk-****")
+        return redact_secret(text)
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:
@@ -371,35 +444,6 @@ class SiliconFlowTTSProvider:
         if error is not None and error.retry_after is not None:
             return error.retry_after
         return _BACKOFF_BASE * (2**attempt)
-
-    @staticmethod
-    def _extract_voices(response: httpx.Response) -> list[str]:
-        try:
-            payload = response.json()
-        except ValueError:
-            return []
-        items: Any = payload
-        if isinstance(payload, Mapping):
-            items = []
-            for field in ("data", "result", "voices", "list", "uris"):
-                if field in payload:
-                    items = payload[field]
-                    break
-        if not isinstance(items, (list, tuple)):
-            return []
-        uris: list[str] = []
-        for item in items:
-            if isinstance(item, str):
-                if item:
-                    uris.append(item)
-                continue
-            if isinstance(item, Mapping):
-                for field in ("uri", "name", "id", "voice"):
-                    value = item.get(field)
-                    if isinstance(value, str) and value:
-                        uris.append(value)
-                        break
-        return uris
 
 
 def create_provider(cfg: object) -> SiliconFlowTTSProvider:

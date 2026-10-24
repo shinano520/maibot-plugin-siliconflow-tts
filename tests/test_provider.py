@@ -290,13 +290,18 @@ def test_empty_response_body_is_not_retried(provider_module):
 # 音色列表
 # --------------------------------------------------------------------------- #
 def test_list_voices_extracts_uris(provider_module):
+    """v1.2：``provider.list_voices`` 是 ``voice.list_voices`` 的薄壳。
+
+    契约 §3.6 冻结「单项缺 ``uri`` 跳过」——旧实现曾把 ``name`` 当 uri 兜底，
+    v1.2 起不再兜底（避免把没有 uri 的脏条目塞给配置层）。
+    """
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return httpx.Response(
             200,
-            json={"data": [{"uri": "speech:alex:1"}, {"uri": "speech:anna:2"}, {"name": "fallback"}]},
+            json={"data": [{"uri": "speech:alex:1"}, {"uri": "speech:anna:2"}, {"name": "no-uri"}]},
         )
 
     async def scenario():
@@ -306,7 +311,7 @@ def test_list_voices_extracts_uris(provider_module):
         finally:
             await provider.aclose()
 
-    assert asyncio.run(scenario()) == ["speech:alex:1", "speech:anna:2", "fallback"]
+    assert asyncio.run(scenario()) == ["speech:alex:1", "speech:anna:2"]
     assert str(seen[0].url) == f"{BASE}/audio/voice/list"
     assert seen[0].method == "GET"
     assert seen[0].headers["authorization"] == "Bearer sk-secret"
@@ -426,3 +431,175 @@ def test_create_provider_uses_config(provider_module):
     assert provider.settings.api_key == "sk-x"
     assert provider.settings.response_format == "opus"
     assert provider.settings.timeout == 15.0
+
+
+# --------------------------------------------------------------------------- #
+# redact_secret（契约 §12 R3）
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("sk-abcdefgh", "sk-****"),
+        ("Authorization: Bearer sk-abcdefgh", "Authorization: Bearer sk-****"),
+        ("key=sk-1234567890abcde tail", "key=sk-**** tail"),
+        ("sk-short", "sk-short"),          # 不足 8 位，不动
+        ("no-secret-here", "no-secret-here"),
+        ("", ""),
+        ("sk-aaaaaaaa sk-bbbbbbbb", "sk-**** sk-****"),
+    ],
+)
+def test_redact_secret(provider_module, raw, expected):
+    assert provider_module.redact_secret(raw) == expected
+
+
+def test_redact_secret_handles_none(provider_module):
+    assert provider_module.redact_secret(None) == ""
+
+
+# --------------------------------------------------------------------------- #
+# request_json（v1.2：音色管理复用的通用 JSON 调用）
+# --------------------------------------------------------------------------- #
+def _request_json(provider_module, handler, *, method="GET", path="/ping", payload=None, **overrides):
+    async def scenario():
+        provider = _provider(provider_module, handler, **overrides)
+        try:
+            return await provider.request_json(method, path, payload=payload)
+        finally:
+            await provider.aclose()
+
+    return asyncio.run(scenario())
+
+
+def test_request_json_get_returns_payload(provider_module):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True, "items": [1, 2]})
+
+    data = _request_json(provider_module, handler)
+    assert data == {"ok": True, "items": [1, 2]}
+    assert seen[0].method == "GET"
+    assert str(seen[0].url) == f"{BASE}/ping"
+    assert seen[0].headers["authorization"] == "Bearer sk-secret"
+    assert seen[0].headers["accept"] == "application/json"
+
+
+def test_request_json_post_sends_json_body(provider_module):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"uri": "speech:x:1:2"})
+
+    data = _request_json(
+        provider_module,
+        handler,
+        method="post",
+        path="no-leading-slash",
+        payload={"uri": "speech:x:1:2"},
+    )
+    assert data == {"uri": "speech:x:1:2"}
+    assert seen[0].method == "POST"
+    assert str(seen[0].url) == f"{BASE}/no-leading-slash", "缺 / 时自动补齐"
+    assert json.loads(seen[0].content) == {"uri": "speech:x:1:2"}
+    assert seen[0].headers["content-type"] == "application/json"
+
+
+def test_request_json_empty_body_returns_none(provider_module):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204)
+
+    assert _request_json(provider_module, handler) is None
+
+
+def test_request_json_non_json_2xx_raises_bad_request(provider_module):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>gateway</html>")
+
+    with pytest.raises(provider_module.ProviderError) as info:
+        _request_json(provider_module, handler)
+    assert info.value.kind == "bad_request"
+    assert info.value.status == 200, "2xx 但不可解析：调用方据此降级"
+
+
+def test_request_json_does_not_retry(provider_module):
+    """契约 §3.2：音色管理不收重试，失败让用户重试即可。"""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(500, json={"message": "boom"})
+
+    with pytest.raises(provider_module.ProviderError) as info:
+        _request_json(provider_module, handler, method="POST", path="/x", retry=3)
+
+    assert info.value.kind == "server"
+    assert len(calls) == 1, "request_json 不套用 synthesize 的重试策略"
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [(400, "bad_request"), (401, "auth"), (403, "auth"), (404, "bad_request"), (503, "server")],
+)
+def test_request_json_http_errors_are_normalised(provider_module, status, kind):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"message": "nope sk-abcdefghijklmn"})
+
+    with pytest.raises(provider_module.ProviderError) as info:
+        _request_json(provider_module, handler)
+
+    assert info.value.kind == kind
+    assert info.value.status == status
+    assert "sk-abcdefghijklmn" not in str(info.value), "错误信息必须脱敏"
+
+
+def test_request_json_without_api_key_raises_config(provider_module):
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    with pytest.raises(provider_module.ProviderError) as info:
+        _request_json(provider_module, handler, api_key="")
+
+    assert info.value.kind == "config"
+    assert calls == []
+
+
+def test_request_json_timeout_and_network(provider_module):
+    def timeout_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("connect timeout", request=request)
+
+    with pytest.raises(provider_module.ProviderError) as info:
+        _request_json(provider_module, timeout_handler)
+    assert info.value.kind == "timeout"
+
+    def network_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(provider_module.ProviderError) as info:
+        _request_json(provider_module, network_handler)
+    assert info.value.kind == "network"
+
+
+def test_list_voices_is_thin_shell_over_voice(provider_module, monkeypatch):
+    """v1.2：``provider.list_voices`` 只委托 ``voice.list_voices``（v1.3 移除）。"""
+    import sys
+
+    voice_module = sys.modules[provider_module.__name__.rsplit(".", 1)[0] + ".voice"]
+
+    async def fake_list_voices(provider, *, timeout=None):
+        return [SimpleNamespace(uri="speech:a:1"), SimpleNamespace(uri="speech:b:2")]
+
+    monkeypatch.setattr(voice_module, "list_voices", fake_list_voices)
+
+    async def scenario():
+        provider = _provider(provider_module, lambda request: httpx.Response(200, json={}))
+        try:
+            return await provider.list_voices()
+        finally:
+            await provider.aclose()
+
+    assert asyncio.run(scenario()) == ["speech:a:1", "speech:b:2"]

@@ -49,3 +49,8 @@ def cache_module():
 @pytest.fixture(scope="session")
 def provider_module():
     return load("provider")
+
+
+@pytest.fixture(scope="session")
+def voice_module():
+    return load("voice")
