@@ -9,10 +9,21 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 #: 回复扩展组件名；Host 会拼成 ``local.siliconflow-tts.voice``
 VOICE_EXTENSION_NAME: str = "voice"
+
+#: 群/私聊开关策略：all=全部开启，whitelist=仅名单内，blacklist=名单外才开启
+POLICY_ALL: str = "all"
+POLICY_WHITELIST: str = "whitelist"
+POLICY_BLACKLIST: str = "blacklist"
+
+#: 允许写成 ``qq:123`` / ``QQ：123`` 的前缀
+_QQ_PREFIX_PATTERN = re.compile(r"(?i)^\s*qq\s*[:：]\s*")
+#: 名单项内的分隔符（逗号、分号、任意空白）
+_ID_SEPARATOR_PATTERN = re.compile(r"[\s,，;；]+")
 
 #: ``prepare`` 阶段注入的朗读要求（CONTRACT §3.6 冻结常量）
 PREPARE_EXTRA_PROMPT: str = (
@@ -29,6 +40,132 @@ TEXT_SEGMENT_TYPE: str = "text"
 
 #: Host 对 ``voice`` 段唯一认可的音频字段名（适配器 ``segment_encoder.py`` 只读这个键）
 VOICE_BASE64_KEY: str = "binary_data_base64"
+
+
+def normalize_peer_id(value: Any) -> str:
+    """把群号/QQ 号归一化成纯数字串（容忍 ``qq:`` 前缀、全角数字与空白）。
+
+    - ``None`` / 空串 / 全空白 → ``""``；
+    - 去掉 ``qq:`` / ``QQ：`` 前缀；
+    - 全角数字（``１２３``）转半角；
+    - 去掉内部空白（含列表项里手写的 ``123 456``）。
+    """
+
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    text = _QQ_PREFIX_PATTERN.sub("", text)
+    text = "".join(
+        chr(ord(char) - 0xFEE0) if "\uff10" <= char <= "\uff19" else char
+        for char in text
+    )
+    return re.sub(r"\s+", "", text)
+
+
+def parse_peer_list(values: Any) -> set[str]:
+    """把配置里的名单归一化成集合（支持一行多个、逗号/分号/空白分隔）。"""
+
+    if values is None:
+        return set()
+    if isinstance(values, str):
+        items: list[Any] = [values]
+    elif isinstance(values, (list, tuple, set)):
+        items = list(values)
+    else:
+        items = [values]
+
+    result: set[str] = set()
+    for item in items:
+        for part in _ID_SEPARATOR_PATTERN.split(str(item or "")):
+            normalized = normalize_peer_id(part)
+            if normalized:
+                result.add(normalized)
+    return result
+
+
+def resolve_chat_peer(chat: Any) -> tuple[bool, str] | None:
+    """从 ``context["chat"]`` 解出 ``(是否群聊, 对端号码)``；拿不到返回 ``None``。
+
+    Host 的 ``chat`` 为 ``asdict(ToolAvailabilityContext)``，键固定为
+    ``session_id/stream_id/is_group_chat/group_id/user_id/platform``。
+    ``is_group_chat`` 缺失/非布尔 → 不猜，直接判定失败（默认白名单拒绝）。
+    """
+
+    if not isinstance(chat, dict):
+        return None
+
+    flag = chat.get("is_group_chat")
+    if isinstance(flag, bool):
+        is_group = flag
+    elif isinstance(flag, int) and flag in (0, 1):
+        is_group = bool(flag)
+    else:
+        return None
+
+    raw_peer = chat.get("group_id") if is_group else chat.get("user_id")
+    peer = normalize_peer_id(raw_peer)
+    if not peer:
+        return None
+    return is_group, peer
+
+
+def is_allowed(
+    *,
+    is_group: bool,
+    peer_id: Any,
+    group_policy: Any,
+    group_list: Any,
+    private_policy: Any,
+    private_list: Any,
+) -> bool:
+    """按群/私聊各自的三态策略判定是否允许发声。
+
+    - ``all`` → 允许；
+    - ``whitelist`` → 仅在名单内才允许；
+    - ``blacklist`` → 名单外才允许；
+    - 策略未知/为空 → 拒绝（默认白名单语义）。
+    """
+
+    peer = normalize_peer_id(peer_id)
+    if not peer:
+        return False
+
+    policy = str((group_policy if is_group else private_policy) or "").strip().lower()
+    ids = parse_peer_list(group_list if is_group else private_list)
+
+    if policy == POLICY_ALL:
+        return True
+    if policy == POLICY_WHITELIST:
+        return peer in ids
+    if policy == POLICY_BLACKLIST:
+        return peer not in ids
+    return False
+
+
+def is_chat_allowed(
+    chat: Any,
+    *,
+    group_policy: Any,
+    group_list: Any,
+    private_policy: Any,
+    private_list: Any,
+) -> bool:
+    """``context["chat"]`` 入口：解不出对端或策略异常时一律拒绝。"""
+
+    resolved = resolve_chat_peer(chat)
+    if resolved is None:
+        return False
+    is_group, peer = resolved
+    return is_allowed(
+        is_group=is_group,
+        peer_id=peer,
+        group_policy=group_policy,
+        group_list=group_list,
+        private_policy=private_policy,
+        private_list=private_list,
+    )
 
 
 def extension_parameters() -> dict[str, dict[str, object]]:

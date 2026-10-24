@@ -54,3 +54,18 @@ def provider_module():
 @pytest.fixture(scope="session")
 def voice_module():
     return load("voice")
+
+
+@pytest.fixture(scope="session")
+def reply_ext_module():
+    return load("reply_ext")
+
+
+@pytest.fixture(scope="session")
+def config_module():
+    return load("config")
+
+
+@pytest.fixture(scope="session")
+def plugin_module():
+    return load("plugin")

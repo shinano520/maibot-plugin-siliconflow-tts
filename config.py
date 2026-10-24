@@ -24,9 +24,10 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Any, Literal
 
 from maibot_sdk import Field, PluginConfigBase
+from pydantic import field_validator
 
 #: ``api_key`` 留空时回落的环境变量名（PLAN §5）
 API_KEY_ENV_VAR = "SILICONFLOW_API_KEY"
@@ -92,6 +93,45 @@ class SiliconFlowTTSSection(PluginConfigBase):
         description="失败策略：text=降级为纯文字；fail=让本次 reply 失败（仅联调）",
         json_schema_extra={"enum": ["text", "fail"], "enum_titles": ["降级为文字", "让回复失败"]},
     )
+    group_policy: Literal["all", "whitelist", "blacklist"] = Field(
+        default="whitelist",
+        description=(
+            "群聊开关：all=全部群开启；whitelist=仅群名单内的群；blacklist=群名单外的群。"
+            "默认 whitelist + 空名单 = 所有群都不发声"
+        ),
+        json_schema_extra={"label": "群聊策略"},
+    )
+    group_list: list[str] = Field(
+        default_factory=list,
+        description="群名单：一行一个群号，支持 qq: 前缀、全角数字、逗号/空格分隔",
+        json_schema_extra={"label": "群名单"},
+    )
+    private_policy: Literal["all", "whitelist", "blacklist"] = Field(
+        default="whitelist",
+        description=(
+            "私聊开关：all=全部私聊开启；whitelist=仅用户名单内的 QQ；blacklist=用户名单外的 QQ。"
+            "默认 whitelist + 空名单 = 所有私聊都不发声"
+        ),
+        json_schema_extra={"label": "私聊策略"},
+    )
+    private_list: list[str] = Field(
+        default_factory=list,
+        description="私聊名单：一行一个 QQ 号，支持 qq: 前缀、全角数字、逗号/空格分隔",
+        json_schema_extra={"label": "私聊名单"},
+    )
+
+    @field_validator("group_list", "private_list", mode="before")
+    @classmethod
+    def _stringify_id_list(cls, value: Any) -> list[str]:
+        """容忍 config.toml 里手写数字数组（``[123]``），统一转成字符串列表。"""
+
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, (list, tuple, set)):
+            return [str(item) for item in value if item is not None]
+        return [str(value)]
 
     @property
     def effective_api_key(self) -> str:
@@ -219,6 +259,22 @@ class SiliconFlowTTSConfig(PluginConfigBase):
     @property
     def fallback_on_error(self) -> Literal["text", "fail"]:
         return self.plugin.fallback_on_error
+
+    @property
+    def group_policy(self) -> Literal["all", "whitelist", "blacklist"]:
+        return self.plugin.group_policy
+
+    @property
+    def group_list(self) -> list[str]:
+        return self.plugin.group_list
+
+    @property
+    def private_policy(self) -> Literal["all", "whitelist", "blacklist"]:
+        return self.plugin.private_policy
+
+    @property
+    def private_list(self) -> list[str]:
+        return self.plugin.private_list
 
     @property
     def effective_api_key(self) -> str:

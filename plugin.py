@@ -35,6 +35,7 @@ from .reply_ext import (
     VOICE_EXTENSION_NAME,
     build_messages,
     extension_parameters,
+    is_chat_allowed,
     prepare_result,
 )
 
@@ -292,8 +293,9 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
     ) -> dict[str, Any]:
         """``prepare`` 注入朗读要求；``before_send`` 把回复改写成语音消息。"""
 
-        del context  # chat/reply_id 等仅用于 Host 观测，本插件不依赖
         try:
+            if not self._voice_allowed(context):
+                return {}
             if not self._extension_active(parameters):
                 return {}
             if phase == "prepare":
@@ -311,6 +313,23 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
                 raise
             self._log_extension_failure(exc, phase)
             return {}
+
+    def _voice_allowed(self, context: dict[str, Any]) -> bool:
+        """按群/私聊开关策略决定本次是否发声；任何异常一律按默认白名单拒绝。"""
+
+        try:
+            chat = context.get("chat") if isinstance(context, dict) else None
+            cfg = self.config
+            return is_chat_allowed(
+                chat,
+                group_policy=cfg.group_policy,
+                group_list=cfg.group_list,
+                private_policy=cfg.private_policy,
+                private_list=cfg.private_list,
+            )
+        except Exception as exc:  # noqa: BLE001 - 判定失败必须降级为不发声
+            self._logger().warning("语音开关判定失败，按默认白名单拒绝：%s", exc)
+            return False
 
     def _extension_active(self, parameters: Any) -> bool:
         """扩展是否应该参与本次回复：参数开关、运行开关与 API Key 三重判断。"""
