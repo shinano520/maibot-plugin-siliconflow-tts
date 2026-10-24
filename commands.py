@@ -18,7 +18,7 @@ import asyncio
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,8 +40,8 @@ PATTERN_TEST = r"^/tts\s+test(?:\s+(?P<text>.+))?$"
 PATTERN_VOICES = r"^/tts\s+voices$"
 PATTERN_CLONE = r"^/tts\s+clone\s+(?P<name>\S+)\s+(?P<filename>\S+)\s+(?P<reference_text>.+)$"
 PATTERN_VOICE_LIST = r"^/tts\s+voice\s+list$"
-PATTERN_VOICE_DEL = r"^/tts\s+voice\s+del\s+(?P<target>\S+)$"
-PATTERN_VOICE_RM = r"^/tts\s+voice\s+rm\s+(?P<target>\S+)$"
+PATTERN_VOICE_DEL = r"^/tts\s+voice\s+del\s+(?P<target>.+)$"
+PATTERN_VOICE_RM = r"^/tts\s+voice\s+rm\s+(?P<target>.+)$"
 PATTERN_ON = r"^/tts\s+on$"
 PATTERN_OFF = r"^/tts\s+off$"
 PATTERN_STATUS = r"^/tts\s+status$"
@@ -58,7 +58,7 @@ HELP_TEXT = "\n".join(
         "/tts voices — 列出账号下可用音色（名称 — uri）",
         "/tts clone <名称> <文件名> <参考文本> — 用 voices/ 目录下的参考音频克隆音色",
         "/tts voice list — 同上，列出音色",
-        "/tts voice del <名称|uri> — 删除克隆音色",
+        "/tts voice del <名称|uri> [--force] — 删除克隆音色（正在使用的需加 --force）",
         "/tts status — 查看配置与运行状态",
         "/tts on — 开启语音合成",
         "/tts off — 关闭语音合成（回复保持纯文字）",
@@ -77,6 +77,15 @@ STATE_FILE_NAME = "state.json"
 
 #: 音色列表最多展示多少条（CONTRACT §3.9）
 MAX_VOICE_LINES = 20
+
+#: 删除被拒时最多列多少个可选音色（够用户挑一个即可）
+MAX_IN_USE_OPTIONS = 10
+
+#: 显式强制删除的开关（大小写不敏感）
+FORCE_FLAGS: tuple[str, ...] = ("--force", "-f")
+
+#: 没有其他克隆音色时建议切回的系统音色
+DEFAULT_SYSTEM_VOICE_HINT = "FunAudioLLM/CosyVoice2-0.5B:alex"
 
 #: ``voice.py`` 未就绪时的兜底规则（正常路径从 voice 模块读取）
 _FALLBACK_SUFFIXES: tuple[str, ...] = (".mp3", ".wav", ".pcm", ".opus")
@@ -448,6 +457,73 @@ async def handle_voice_list(
     return await _reply(send_text, stream_id, "\n".join(lines))
 
 
+def parse_delete_target(raw: str) -> tuple[str, bool]:
+    """把 ``<名称|uri> [--force]`` 拆成 ``(target, force)``。
+
+    命令正则把整个尾部收进 ``target`` 组（plugin.py 只透传该组、不解析参数），
+    因此强制开关在这里解析：末尾 token 为 ``--force`` / ``-f`` 即视为强制。
+    """
+
+    tokens = str(raw or "").split()
+    force = bool(tokens) and tokens[-1].lower() in FORCE_FLAGS
+    target = " ".join(tokens[:-1] if force else tokens).strip()
+    return target, force
+
+
+def current_voice_of(provider: Any) -> str:
+    """当前生效音色：``provider.settings.voice``（= ``config.effective_voice`` 的快照）。
+
+    插件在 ``on_load`` / ``on_config_update`` 重建 provider，因此这里读到的就是
+    下一次合成真正会用的 voice（克隆 uri 或 ``模型:音色名``）。
+    """
+
+    settings = getattr(provider, "settings", None)
+    voice = getattr(settings, "voice", "") if settings is not None else ""
+    return str(voice or "").strip()
+
+
+def voice_in_use(*, uri: str, name: str, current: str) -> bool:
+    """目标音色是否正在使用：uri 相等，或 customName 命中配置 voice。"""
+
+    current = (current or "").strip()
+    uri = (uri or "").strip()
+    name = (name or "").strip()
+    if not current:
+        return False
+    if uri and current == uri:
+        return True
+    if current.startswith("speech:"):
+        # 克隆 uri 只按 uri 相等判断，避免用短名误伤别的克隆音色
+        return False
+    if not name:
+        return False
+    return current == name or current.endswith(f":{name}")
+
+
+def voice_in_use_message(*, current: str, target: str, profiles: Sequence[Any], uri: str) -> str:
+    """拒删文案：说清原因、给可选项与切换方式、给强制删除入口。"""
+
+    lines = [
+        "⛔ 已取消删除：该音色当前正在使用中（config.voice）。",
+        f"当前配置 voice = {current or '(未配置)'}",
+        "请先把 voice 切到别的音色，再删除。可选音色：",
+    ]
+    options = [
+        f"- {str(getattr(item, 'name', '') or '(未命名)')} — {str(getattr(item, 'uri', '') or '')}"
+        for item in profiles
+        if str(getattr(item, "uri", "") or "").strip() and str(getattr(item, "uri", "") or "") != uri
+    ][:MAX_IN_USE_OPTIONS]
+    if options:
+        lines.extend(options)
+        lines.append("切换方式：把上面的 uri 填进 WebUI 插件配置的 voice 字段，保存后 /tts status 确认。")
+    else:
+        lines.append(f"- （没有其他克隆音色）可先切回系统音色，如 {DEFAULT_SYSTEM_VOICE_HINT}")
+        lines.append("切换方式：在 WebUI 插件配置的 voice 字段填「模型:音色名」。")
+    lines.append(f"确认要强删请重发：/tts voice rm {target} --force")
+    lines.append("（强制删除后必须立刻切换 voice，否则下一次合成会失败）")
+    return "\n".join(lines)
+
+
 async def handle_voice_delete(
     *,
     stream_id: str,
@@ -456,16 +532,16 @@ async def handle_voice_delete(
     timeout: float | None,
     send_text: SendText,
 ) -> tuple[bool, str, int]:
-    """``/tts voice del|rm <名称|uri>``：删除克隆音色，返回是否真的删掉。"""
+    """``/tts voice del|rm <名称|uri> [--force]``：删除克隆音色。
 
-    target = (target or "").strip()
-    if not target:
-        return await _reply(
-            send_text,
-            stream_id,
-            "❌ 缺少要删除的音色。用法：/tts voice del <名称|uri>",
-            success=False,
-        )
+    删除前比对当前生效音色（``provider.settings.voice``）：uri 相等或 customName
+    命中配置 voice 时拒删（避免删完合成 4xx）；显式 ``--force`` 才放行并提醒切换。
+    """
+
+    requested, force = parse_delete_target(target)
+    usage = "用法：/tts voice del <名称|uri> [--force]"
+    if not requested:
+        return await _reply(send_text, stream_id, f"❌ 缺少要删除的音色。{usage}", success=False)
 
     if provider is None:
         return await _reply(
@@ -480,27 +556,55 @@ async def handle_voice_delete(
     except VoiceModuleUnavailable as exc:
         return await _reply(send_text, stream_id, _voice_unavailable_message(exc), success=False)
 
-    uri = target
-    if ":" not in target:  # 传的是名称，先解析成 uri
-        try:
-            profiles = await voice_module.list_voices(provider, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 - 命令只回文字，不向上抛
+    # 先尽量拿一份音色表：名称→uri 解析、customName 比对、拒删时的可选项都靠它。
+    # 传 uri 删除时即使列表失败也继续（uri 相等判断仍然有效），不因展示数据缺失阻断删除。
+    profiles: list[Any] = []
+    list_error: Exception | None = None
+    try:
+        profiles = list(await voice_module.list_voices(provider, timeout=timeout))
+    except Exception as exc:  # noqa: BLE001 - 命令只回文字，不向上抛
+        list_error = exc
+
+    if ":" not in requested:
+        if list_error is not None:
             return await _reply(
                 send_text,
                 stream_id,
-                provider_failure_message(exc, action="查询音色列表"),
+                provider_failure_message(list_error, action="查询音色列表"),
                 success=False,
             )
-        matched = [item for item in profiles or [] if str(getattr(item, "name", "") or "") == target]
+        matched = [item for item in profiles if str(getattr(item, "name", "") or "") == requested]
         if not matched:
             return await _reply(
                 send_text,
                 stream_id,
-                f"❌ 未找到名为「{target}」的音色。\n"
+                f"❌ 未找到名为「{requested}」的音色。\n"
                 "先发 /tts voice list 确认现有名称，或直接传 speech: 开头的 uri。",
                 success=False,
             )
-        uri = str(getattr(matched[0], "uri", "") or "")
+        profile = matched[0]
+        uri = str(getattr(profile, "uri", "") or "")
+        name = str(getattr(profile, "name", "") or "")
+    else:
+        uri = requested
+        name = next(
+            (
+                str(getattr(item, "name", "") or "")
+                for item in profiles
+                if str(getattr(item, "uri", "") or "") == uri
+            ),
+            "",
+        )
+
+    current = current_voice_of(provider)
+    in_use = voice_in_use(uri=uri, name=name, current=current)
+    if in_use and not force:
+        return await _reply(
+            send_text,
+            stream_id,
+            voice_in_use_message(current=current, target=requested, profiles=profiles, uri=uri),
+            success=False,
+        )
 
     try:
         deleted = await voice_module.delete_voice(provider, uri=uri, timeout=timeout)
@@ -516,15 +620,29 @@ async def handle_voice_delete(
             success=False,
         )
 
+    if in_use:
+        return await _reply(
+            send_text,
+            stream_id,
+            "\n".join(
+                (
+                    f"✅ 已强制删除音色：{requested}",
+                    f"⚠️ 配置 voice 仍指向 {current or '该音色'}，请立刻改到别的音色"
+                    "（WebUI 的 voice 字段，或 config.toml 的 [plugin].voice），否则下一次合成会失败。",
+                    "删除不可恢复，需要重新克隆才能再用。",
+                )
+            ),
+        )
+
     return await _reply(
         send_text,
         stream_id,
         "\n".join(
             (
-                f"✅ 已删除音色：{target}",
+                f"✅ 已删除音色：{requested}",
                 "删除不可恢复，需要重新克隆才能再用。",
-                "如果配置里的 voice 还指向这个 uri，请改回系统音色（如 FunAudioLLM/CosyVoice2-0.5B:alex），"
-                "否则合成会失败。",
+                "如果配置里的 voice 还指向这个 uri，请改回系统音色（如 "
+                f"{DEFAULT_SYSTEM_VOICE_HINT}），否则合成会失败。",
             )
         ),
     )
