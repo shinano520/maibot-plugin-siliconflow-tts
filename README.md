@@ -91,9 +91,10 @@ git clone https://github.com/shinano520/maibot-plugin-siliconflow-tts.git
 硅基流动 TTS 已加载：model=... voice=... format=mp3/44100Hz 缓存=开 运行开关=开
 ```
 
-3. 部署后 `plugins/` 下会多出一个数据目录 **`local.siliconflow-tts/`**（不是代码目录），里面是：
-   `config.toml`、`audio/`（缓存）、`voices/`（克隆参考音频）、`state.json`（`/tts on|off` 运行期开关）。
-   **不要删它**；代码目录与它互不影响。
+3. 部署后 `plugins/` 下会多出一个**数据目录** **`local.siliconflow-tts/`**（不是代码目录），里面是：
+   `audio/`（音频缓存）、`voices/`（克隆参考音频）、`state.json`（`/tts on|off` 运行期开关）。
+   而 **`config.toml` 在插件代码目录根**（Runner 首次加载时生成，与 `plugin.py` 同级）。
+   **不要删数据目录**；代码目录与它互不影响。
 
 > 装在 Docker 里时，上面这个数据目录在宿主上的位置同样是 `.../data/MaiMBot/plugins/local.siliconflow-tts/`。
 
