@@ -150,7 +150,7 @@ reply_ext.before_send  → text 转音频：
 | `response_format` | enum | `mp3` | `mp3`/`wav`/`opus` |
 | `sample_rate` | int | `44100` | 按格式校验合法值 |
 | `keep_text` | bool | `true` | 语音之外是否保留原文字 |
-| `auto_voice` | bool | `false` | `true` 时回复默认带语音，无需 Planner 选参数 |
+| `auto_voice` | bool | `false` | **尽力而为，非强制**。ReplyExtension 只有在 Planner 主动填 `plugin_options` 时才会被调用，扩展自身无法让自己「总是参与」。故此项 M1 仅作配置占位，M2 由 Hook 在 reply 调用前注入 `plugin_options` 才真正生效 |
 | `max_chars` | int | `300` | 超长截断（按 UTF-8 字节另算，见 6.3） |
 | `timeout_ms` | int | `60000` | 与 `@ReplyExtension(timeout_ms=)` 对齐 |
 | `retry` | int | `2` | 429/5xx 重试次数 |
@@ -228,6 +228,7 @@ sha256(model | voice | speed | gain | format | sample_rate | normalized_text)
 | **R5** | 语音段与文字段的顺序/引用关系 | 可能出现「先语音后文字」 | 观察 `quote_previous` 与首条引用行为 |
 | **R6** | `@ReplyExtension` 在麦麦 8.15.37 的实际支持 | 版本不够则组件不生效 | 查 `maibot-plugin-sdk` 版本 ≥ 2.14.0 |
 | **R7** | 计费失控 | 群聊高频触发烧钱 | 缓存 + `max_chars` + 全局限流（M2 加） |
+| **R8** | **扩展无法自动参与**：`@ReplyExtension` 只在 Planner 主动填 `plugin_options` 时被调用，扩展自身无法强制生效 | 麦麦可能一次都不用语音，功能形同虚设 | M1 用 `/tts test` 与 Prompt 引导验证；M2 用 Hook 在 reply 前注入 `plugin_options` 兜底 |
 
 ---
 
