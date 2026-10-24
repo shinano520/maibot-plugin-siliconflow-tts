@@ -656,8 +656,8 @@ Runner 依据它生成 `config.toml` 与 WebUI Schema，并自动补齐缺失字
 | 1 | `enabled` | `bool` | `true` | — | 组件总开关 |
 | 2 | `api_key` | `str` | `""` | 见 §12 | 空则回落环境变量 `SILICONFLOW_API_KEY` |
 | 3 | `base_url` | `str` | `https://api.siliconflow.cn/v1` | 去尾 `/` | 便于指向自建反代 |
-| 4 | `model` | `str` | `FunAudioLLM/CosyVoice2-0.5B` | — | TTS 模型（克隆也用这个） |
-| 5 | `voice` | `str` | `FunAudioLLM/CosyVoice2-0.5B:alex` | — | 音色：`模型:音色名` **或克隆 uri `speech:...`**；规则见 §3.1 `effective_voice` |
+| 4 | `model` | `str` | `fnlp/MOSS-TTSD-v0.5` | — | TTS 模型（克隆也用这个）；`FunAudioLLM/CosyVoice2-0.5B` 当前上游不可用（会 100% 超时），勿作默认 |
+| 5 | `voice` | `str` | `fnlp/MOSS-TTSD-v0.5:anna` | — | 音色：`模型:音色名` **或克隆 uri `speech:...`**；规则见 §3.1 `effective_voice`；CosyVoice2 音色当前不可用 |
 | 6 | `speed` | `float` | `1.0` | `0.25 ≤ x ≤ 4.0` | 语速 |
 | 7 | `gain` | `float` | `0.0` | `-10 ≤ x ≤ 10` | 增益 dB |
 | 8 | `response_format` | `Literal` | `"mp3"` | `mp3`/`wav`/`opus` | 输出格式 |

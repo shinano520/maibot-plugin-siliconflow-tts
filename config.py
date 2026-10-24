@@ -50,10 +50,19 @@ class SiliconFlowTTSSection(PluginConfigBase):
         description="硅基流动 API Key；留空则回落到环境变量 SILICONFLOW_API_KEY",
     )
     base_url: str = Field(default="https://api.siliconflow.cn/v1", description="API 根地址，可指向自建反代")
-    model: str = Field(default="FunAudioLLM/CosyVoice2-0.5B", description="TTS 模型名")
+    model: str = Field(
+        default="fnlp/MOSS-TTSD-v0.5",
+        description=(
+            "TTS 模型名；FunAudioLLM/CosyVoice2-0.5B 当前上游不可用（实测会 100% 超时），"
+            "请保持 fnlp/MOSS-TTSD-v0.5"
+        ),
+    )
     voice: str = Field(
-        default="FunAudioLLM/CosyVoice2-0.5B:alex",
-        description="音色：模型:音色名，也可只写音色名",
+        default="fnlp/MOSS-TTSD-v0.5:anna",
+        description=(
+            "音色：模型:音色名，也可只写音色名；CosyVoice2 的音色当前上游不可用（换回会超时），"
+            "默认用 MOSS 内置音色 anna"
+        ),
     )
     speed: float = Field(default=1.0, ge=0.25, le=4.0, description="语速 [0.25, 4.0]")
     gain: float = Field(default=0.0, ge=-10.0, le=10.0, description="增益 dB [-10, 10]")
