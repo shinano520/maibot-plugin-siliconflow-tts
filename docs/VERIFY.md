@@ -358,7 +358,7 @@ cache files= ['/tmp/tts_cache_verify/audio/35/358ac032c987cadbe1b7ae9b3406dd8819
 
 | # | 问题 | 影响 | 处理 |
 |---|---|---|---|
-| 1 | **CosyVoice2 上游不可用**（60–180 s 挂起，0 字节） | 用 CosyVoice2 必然超时 | 运行实例已切 `fnlp/MOSS-TTSD-v0.5`；plugin-dev 正在把仓库默认 `model` 也切到 MOSS，落地后以 MOSS 为准 |
+| 1 | **CosyVoice2 上游不可用**（60–180 s 挂起，0 字节） | 用 CosyVoice2 必然超时 | 运行实例已切 `fnlp/MOSS-TTSD-v0.5`；仓库默认 `model`/`voice` 也已切到 `fnlp/MOSS-TTSD-v0.5` / `:anna`（commit `0b29c07`） |
 | 2 | MOSS 输出 ~163.3 s 饱和，>~500 字尾部不朗读 | 长文只念前半 | 保持 `max_chars=300`；不要调高 |
 | 3 | 容器 `ffmpeg` 不存在 | 无法做 silk 转码 | 不需要（R1 已证 QQ 服务端转 SILK）；silk 分支保持不启用 |
 | 4 | 设备联系人（我的手机/电脑）拒绝 `record` | 不能发到设备会话 | QQ 限制，改用群/好友会话 |
@@ -370,7 +370,7 @@ cache files= ['/tmp/tts_cache_verify/audio/35/358ac032c987cadbe1b7ae9b3406dd8819
 
 1. 最终试听语音已发到私聊 `3388984854`，等用户人耳确认音色；通过即固化，不通过则回到素材/克隆环节。
 2. 克隆 uri（`speech:<账号私有克隆音色>`）只保留在服务器 `config.toml`，**不要提交仓库或写进测试夹具**。
-3. 仓库默认 `model` 以 plugin-dev 的 CosyVoice2 → MOSS 变更为准；README 的默认配置同步更新。
+3. 仓库默认 `model`/`voice` 已切到 MOSS（commit `0b29c07`）；README 的默认配置同步更新。
 4. 如要让 `auto_voice` 真正生效，另开任务做 Hook 注入 `plugin_options`（PLAN R8，不在本次范围）。
 
 ---
