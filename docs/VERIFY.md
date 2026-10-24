@@ -14,7 +14,7 @@
 
 | # | 风险 | 结论 | 关键证据 |
 |---|---|---|---|
-| **R1** | QQ 对 mp3 语音的兼容性 | ✅ **兼容**：SnowLuma/QQ 接收 mp3，服务端自动转成 SILK；**插件不需要自己做 ffmpeg/silk 转码**。真机试听按指挥暂停，等新素材 | `retcode:0` + `message_id`；回读 `record` 变 `*.amr`；下载文件头 `\x02#!SILK_`（16,836 B） |
+| **R1** | QQ 对 mp3 语音的兼容性 | ✅ **兼容 + 最终真机试听已投递**（克隆音色 v3 → 私聊 `3388984854`，`message_id -1057918591`）。QQ 接收 mp3 后服务端转 SILK；插件不需要 ffmpeg/silk 转码。主观听感待用户确认 | 两次 `send_private_msg retcode:0`；`get_msg` 回读 `record` 变 `*.amr`；下载文件头 `\x02#!SILK_`（16,836 B / 18,700 B） |
 | **R2** | `can_send_record` 在 SnowLuma 下的返回 | ✅ 支持 | `{"status":"ok","retcode":0,"data":{"yes":true}}` |
 | **R3** | 容器内 `ffmpeg` / `pysilk` | `ffmpeg` ❌ 无；`pysilk` ✅ 有（模块可导入） | `which ffmpeg` 空；`pysilk.__file__` 存在；插件日志 `转码能力={'ffmpeg': False, 'pysilk': True}` |
 | **R4** | 硅基流动单次文本长度上限 | ✅ 300/800/2000 字全部 HTTP 200；但**音频输出在 ~163.3 s 饱和**，约 600 字以上尾部不再朗读。插件默认 `max_chars=300`（≈97 s）是安全值 | 见 §4 表格与 mp3 帧解析时长 |
@@ -101,13 +101,40 @@ docker exec maim-bot-core sh -lc 'echo -n "env_key_len="; printenv SILICONFLOW_A
 
 ### 2.1 状态
 
-按指挥要求，**01:31 之后已停止一切真实投递**（`/tts test` 真发、ReplyExtension 真发均暂停），
-真机试听等用户提供新的纯净参考音频后再做最后一步。
-**01:31 之前**已投递过 1 条测试语音（私聊 `3430500996`），该条即为下面的证据来源，可撤回。
+**最终真机试听已完成**：按指挥**只发私聊 `3388984854`、只发一条**，使用用户定稿的克隆音色 v3
+（`speech:<账号私有克隆音色>`，仅保存在服务器配置，不写入仓库/测试夹具）。更早 01:31 还有一条测试语音发到了
+`3430500996`（当时未知正确收件人，**不是**本次最终试听，可撤回）。除此之外未向任何群/私聊投递。
+
+- 试听文本：「你好呀，我是大肥鱼。今天也要一起摸鱼吗？」（5.67 s / 91,976 B mp3）
+- 合成方式：插件自身 `provider.py` + `text.prepare()`，配置 `model=fnlp/MOSS-TTSD-v0.5`
 
 ### 2.2 证据（OneBot → SnowLuma → QQ）
 
+#### A. 最终试听（克隆音色 v3 → 3388984854）
+
+```json
+{"status":"ok","retcode":0,"data":{"message_id":-1057918591},"echo":"send_private_msg"}
+```
+
+回读同一 `message_id`：
+
+```json
+{"status":"ok","retcode":0,"data":{"message_id":-1057918591,"message_type":"private","sub_type":"friend",
+ "message":[{"type":"record","data":{"file":"c196e152c4f70b4427c74e9847dc2471.amr",
+ "url":"https://multimedia.nt.qq.com.cn/download?appid=1402&fileid=…（rkey 已省略）"}}]}}
+```
+
+下载该 URL 做魔数校验：
+
+```text
+downloaded bytes= 18700
+head= b'\x02#!SILK_'        # QQ 服务端已把 91,976 B 的 mp3 转成 SILK
+```
+
+#### B. 首条（MOSS 内置音色，误发 3430500996，仅作格式兼容证据）
+
 发送（MOSS 生成的 mp3，79,437 B，`ID3` 头）：
+
 
 ```json
 {"status": "ok", "retcode": 0, "data": {"message_id": 1579510977}, "echo": "send_private_msg"}
@@ -135,6 +162,9 @@ head= b'\x02#!SILK_'        # 实际是 SILK，不是 AMR；文件名 .amr 只�
 3. 设备联系人（“我的手机”/“我的电脑”）会拒绝 `record`：
    `{"status":"failed","retcode":1400,"wording":"message element \"record\" cannot be sent to this contact"}`。
    这是 QQ 对设备联系人的限制，与 mp3 格式无关。
+4. **最终真机试听（克隆音色 v3）**：`message_id -1057918591`，`record file c196e152…amr`，
+   QQ 侧 SILK 18,700 B；技术链路通过。**R1 最终真机试听：通过（投递/格式/编码）；主观听感待用户人耳确认**
+   —— 报告不代替听觉判断，避免编造「像不像」的结论。
 
 > 证据口径：这一条是**直接调 SnowLuma OneBot**（`send_private_msg`）验证 QQ 侧兼容性；
 > 插件路径在其前面还有 Host 的 `voice` 段归一化与适配器编码，已分别由 §6.2 的源码与 §7 的
@@ -150,8 +180,8 @@ head= b'\x02#!SILK_'        # 实际是 SILK，不是 AMR；文件名 .amr 只�
 - `transcode_to_silk()` 仍是 `NotImplementedError` 预留桩（`audio.py:119-126`）；
 - 容器里 `ffmpeg` 本来就不存在，`pysilk` 虽有但**不需要**用来做出站转码。
 
-> 真机试听（手机端能否听到声音）**留空待命**：等新素材定稿后按 `/tts test` 走一遍即可，
-> 不需要再改代码。
+> 最终试听已投递（克隆音色 v3，`message_id -1057918591`）。**主观听感（像不像大肥鱼）需用户人耳确认**；
+> 技术侧已闭环：插件 provider 生成 mp3 → QQ 接收 → 服务端转 SILK。
 
 ---
 
@@ -266,7 +296,7 @@ pysilk: /MaiMBot/.venv/lib/python3.13/site-packages/pysilk/__init__.py
   不会出现「先语音后文字」。
 - **引用**：语音段 `quote_previous=False`（不引用）；原文字段保留自己的 `quote_previous`，
   不受扩展影响。`keep_text=False` 时只删 `text` 段，`image` 等其他段保留，删空的消息整条丢弃。
-- 本项为**载荷级验证**（未做真实投递，遵守暂停指令）；载荷形状已通过 Host 的 `validate_reply_messages`
+- 本项为**载荷级验证**（R5 本身不涉及真实投递）；载荷形状已通过 Host 的 `validate_reply_messages`
   规则逐条核对。
 
 ---
@@ -328,19 +358,19 @@ cache files= ['/tmp/tts_cache_verify/audio/35/358ac032c987cadbe1b7ae9b3406dd8819
 
 | # | 问题 | 影响 | 处理 |
 |---|---|---|---|
-| 1 | **CosyVoice2 上游不可用**（60–180 s 挂起，0 字节） | 用默认模型必然超时 | 配置已切 `fnlp/MOSS-TTSD-v0.5`；建议把插件默认 `model` 也改成 MOSS，或在 README 显著标注 |
+| 1 | **CosyVoice2 上游不可用**（60–180 s 挂起，0 字节） | 用 CosyVoice2 必然超时 | 运行实例已切 `fnlp/MOSS-TTSD-v0.5`；plugin-dev 正在把仓库默认 `model` 也切到 MOSS，落地后以 MOSS 为准 |
 | 2 | MOSS 输出 ~163.3 s 饱和，>~500 字尾部不朗读 | 长文只念前半 | 保持 `max_chars=300`；不要调高 |
 | 3 | 容器 `ffmpeg` 不存在 | 无法做 silk 转码 | 不需要（R1 已证 QQ 服务端转 SILK）；silk 分支保持不启用 |
 | 4 | 设备联系人（我的手机/电脑）拒绝 `record` | 不能发到设备会话 | QQ 限制，改用群/好友会话 |
 | 5 | key 目前靠临时 compose override 注入 | 重建容器可能丢变量 | 正式部署写进 compose env / `.env` / secret，勿提交仓库 |
-| 6 | 真机试听未做（按指令暂停） | 手机端能否出声尚未人耳确认 | 等新素材定稿后走 `/tts test`，无需改代码 |
-| 7 | 01:31 已投递的 1 条测试语音（私聊 3430500996） | 可能打扰用户 | 可撤回；之后未再投递 |
+| 6 | **主观听感未人耳确认**（技术链路已通过） | 音色「像不像」尚无结论 | 用户听 `3388984854` 的最终试听语音后给结论 |
+| 7 | 首条测试语音误发到 `3430500996`（`message_id 1579510977`） | 收件人不是用户本人 | 已按要求补发到 `3388984854`；首条可撤回 |
 
 ### 下一步（建议）
 
-1. 用户选定新的纯净参考音频 → 用 MOSS 重新克隆（CosyVoice2 的旧 uri 不可用）。
-2. 克隆 uri 填进 `voice`（`speech:<name>:<id>:<hash>` 形式）后，`/tts test` 真发一条做最终人耳试听。
-3. 试听通过后，把 `config.toml` 的 `model` 固化为 `fnlp/MOSS-TTSD-v0.5`，并把默认配置写进 README。
+1. 最终试听语音已发到私聊 `3388984854`，等用户人耳确认音色；通过即固化，不通过则回到素材/克隆环节。
+2. 克隆 uri（`speech:<账号私有克隆音色>`）只保留在服务器 `config.toml`，**不要提交仓库或写进测试夹具**。
+3. 仓库默认 `model` 以 plugin-dev 的 CosyVoice2 → MOSS 变更为准；README 的默认配置同步更新。
 4. 如要让 `auto_voice` 真正生效，另开任务做 Hook 注入 `plugin_options`（PLAN R8，不在本次范围）。
 
 ---
@@ -379,5 +409,6 @@ docker exec maim-bot-core sh -lc "grep -rl 'local.siliconflow-tts.voice' /MaiMBo
 
 ---
 
-**结论**：R1–R7 全部有明确结论与证据；R1 的「手机端人耳试听」因用户要求更换音色素材而**有意留空**，
-链路本身已由 `mp3 → QQ → SILK` 的实测闭环证明可用。插件不需要 ffmpeg/silk 出站转码。
+**结论**：R1–R7 全部有明确结论与证据。R1 的最终真机试听已按指挥**只发私聊 `3388984854`、只发一条**
+（`message_id -1057918591`），QQ 回读 `c196e152…amr`，下载实际为 `\x02#!SILK_`（18,700 B）——
+**R1 最终真机试听：通过（投递/格式/编码），主观听感待用户确认**。插件不需要 ffmpeg/silk 出站转码。
