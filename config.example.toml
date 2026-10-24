@@ -8,6 +8,9 @@
 #
 # 安全红线：不要把真实 API Key 写进任何会提交的文件。
 # 推荐保持 api_key = ""，改用环境变量 SILICONFLOW_API_KEY（见 README「配置」一节）。
+#
+# ⚠️ 本文件默认「不发声」：文末 group_policy / private_policy 都是 whitelist + 空名单。
+#    先看 README「语音开关（默认全关）」，把自己的群号 / QQ 填进名单。
 
 [plugin]
 config_version = "1.0.0"
@@ -74,3 +77,18 @@ cache_max_mb = 200
 # text = 降级为纯文字（推荐，绝不让语音失败拖垮整条回复）
 # fail = 让本次回复失败（仅联调用）
 fallback_on_error = "text"
+
+# ── 语音开关（默认全关）──────────────────────────────────────
+# 群聊策略：all=全开 / whitelist=仅名单内 / blacklist=名单外才开
+group_policy = "whitelist"
+# 群号列表，一行一条。策略为 whitelist/blacklist 时生效
+group_list = []
+
+# 私聊策略：同上
+private_policy = "whitelist"
+# 用户 QQ 号列表，一行一条
+private_list = []
+
+# ⚠️ 必须强调：whitelist + 空列表 = 谁都不发语音，这是刻意的安全默认。
+#    装好后不会自动发声；要先把自己的群号 / QQ 号填进对应名单。
+#    名单支持 qq: 前缀、全角数字、空格与逗号分隔，会自动归一化，不用手动清洗。
