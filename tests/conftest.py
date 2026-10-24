@@ -69,3 +69,8 @@ def config_module():
 @pytest.fixture(scope="session")
 def plugin_module():
     return load("plugin")
+
+
+@pytest.fixture(scope="session")
+def commands_module():
+    return load("commands")

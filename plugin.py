@@ -36,7 +36,9 @@ from .reply_ext import (
     build_messages,
     extension_parameters,
     is_chat_allowed,
+    parse_peer_list,
     prepare_result,
+    resolve_chat_peer,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - 仅用于类型标注
@@ -294,7 +296,7 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
         """``prepare`` 注入朗读要求；``before_send`` 把回复改写成语音消息。"""
 
         try:
-            if not self._voice_allowed(context):
+            if not self._voice_allowed(context, phase=phase):
                 return {}
             if not self._extension_active(parameters):
                 return {}
@@ -314,22 +316,54 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
             self._log_extension_failure(exc, phase)
             return {}
 
-    def _voice_allowed(self, context: dict[str, Any]) -> bool:
-        """按群/私聊开关策略决定本次是否发声；任何异常一律按默认白名单拒绝。"""
+    def _voice_allowed(self, context: dict[str, Any], *, phase: str = "before_send") -> bool:
+        """按群/私聊开关策略决定本次是否发声；任何异常一律按默认白名单拒绝。
+
+        同一次 reply 的 ``prepare`` 与 ``before_send`` 都会调用本方法，但只在
+        ``before_send`` 阶段打拒绝日志，避免一条回复刷两条。
+        """
 
         try:
             chat = context.get("chat") if isinstance(context, dict) else None
             cfg = self.config
-            return is_chat_allowed(
+            allowed = is_chat_allowed(
                 chat,
                 group_policy=cfg.group_policy,
                 group_list=cfg.group_list,
                 private_policy=cfg.private_policy,
                 private_list=cfg.private_list,
             )
+            if not allowed and phase == "before_send":
+                self._log_policy_denied(chat, cfg)
+            return allowed
         except Exception as exc:  # noqa: BLE001 - 判定失败必须降级为不发声
             self._logger().warning("语音开关判定失败，按默认白名单拒绝：%s", exc)
             return False
+
+    def _log_policy_denied(self, chat: Any, cfg: Any) -> None:
+        """拒绝时打一条可定位的 INFO；日志自身异常绝不影响主链路。"""
+
+        try:
+            resolved = resolve_chat_peer(chat)
+            if resolved is None:
+                self._logger().info("语音开关拒绝: chat 中缺少 is_group_chat/群号/QQ号")
+                return
+            is_group, peer = resolved
+            if is_group:
+                policy = cfg.group_policy
+                ids = parse_peer_list(cfg.group_list)
+            else:
+                policy = cfg.private_policy
+                ids = parse_peer_list(cfg.private_list)
+            self._logger().info(
+                "语音开关拒绝: is_group=%s peer=%s policy=%s hit=%s",
+                is_group,
+                peer,
+                policy,
+                peer in ids,
+            )
+        except Exception:  # noqa: BLE001 - 日志失败不能拖垮回复
+            pass
 
     def _extension_active(self, parameters: Any) -> bool:
         """扩展是否应该参与本次回复：参数开关、运行开关与 API Key 三重判断。"""
@@ -431,6 +465,13 @@ class SiliconFlowTTSPlugin(MaiBotPlugin):
             "缓存": cache_line,
             "失败策略": "降级为纯文字" if cfg.fallback_on_error == "text" else "让本次回复失败（联调）",
             "auto_voice": "开（当前版本未接入 Hook）" if cfg.auto_voice else "关",
+            "语音开关": "\n"
+            + commands_module.format_policy_summary(
+                group_policy=cfg.group_policy,
+                group_list=cfg.group_list,
+                private_policy=cfg.private_policy,
+                private_list=cfg.private_list,
+            ),
         }
 
     # ── /tts 命令组 ────────────────────────────────────────────

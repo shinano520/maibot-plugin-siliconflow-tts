@@ -205,6 +205,9 @@ def _fake_plugin(plugin_module, config_module):
         _logger=lambda: logging.getLogger("tts-policy-test"),
     )
     fake._voice_allowed = types.MethodType(plugin_module.SiliconFlowTTSPlugin._voice_allowed, fake)
+    fake._log_policy_denied = types.MethodType(
+        plugin_module.SiliconFlowTTSPlugin._log_policy_denied, fake
+    )
     return fake
 
 
@@ -243,3 +246,97 @@ def test_reply_voice_returns_empty_for_both_phases_when_denied(plugin_module, co
             )
         )
         assert result == {}
+
+
+# ── t13：拒绝日志 + /tts status 语音开关 ───────────────────────
+def test_denied_logs_reason(plugin_module, config_module, caplog):
+    fake = _fake_plugin(plugin_module, config_module)
+    context = {"chat": _chat(is_group=True, group="652468225")}
+
+    with caplog.at_level(logging.INFO, logger="tts-policy-test"):
+        assert (
+            plugin_module.SiliconFlowTTSPlugin._voice_allowed(
+                fake, context, phase="before_send"
+            )
+            is False
+        )
+
+    text = caplog.text
+    assert "语音开关拒绝" in text
+    assert "is_group=True" in text
+    assert "peer=652468225" in text
+    assert "policy=whitelist" in text
+    assert "hit=False" in text
+
+
+def test_denied_logs_only_once_for_two_phases(plugin_module, config_module, caplog):
+    fake = _fake_plugin(plugin_module, config_module)
+    context = {"chat": _chat(is_group=False, user="3430500996")}
+
+    with caplog.at_level(logging.INFO, logger="tts-policy-test"):
+        assert (
+            plugin_module.SiliconFlowTTSPlugin._voice_allowed(fake, context, phase="prepare")
+            is False
+        )
+        assert (
+            plugin_module.SiliconFlowTTSPlugin._voice_allowed(
+                fake, context, phase="before_send"
+            )
+            is False
+        )
+
+    assert caplog.text.count("语音开关拒绝") == 1
+
+
+def test_policy_summary_shows_policy_and_counts_without_numbers(commands_module):
+    text = commands_module.format_policy_summary(
+        group_policy="whitelist",
+        group_list=["652468225", "100"],
+        private_policy="whitelist",
+        private_list=["3430500996"],
+    )
+
+    assert "群聊" in text and "whitelist" in text
+    assert "已配置 2 个群" in text
+    assert "私聊" in text and "已配置 1 个用户" in text
+    assert "652468225" not in text
+    assert "3430500996" not in text
+
+
+def test_policy_summary_all_and_blacklist_hints(commands_module):
+    text = commands_module.format_policy_summary(
+        group_policy="all",
+        group_list=[],
+        private_policy="blacklist",
+        private_list=["1", "2"],
+    )
+
+    assert "不限会话" in text
+    assert "blacklist" in text
+    assert "名单 2 个用户" in text
+
+
+def test_policy_summary_empty_whitelist_warns_no_voice(commands_module):
+    text = commands_module.format_policy_summary(
+        group_policy="whitelist",
+        group_list=[],
+        private_policy="whitelist",
+        private_list=[],
+    )
+
+    assert text.count("当前不会发语音") == 2
+
+
+def test_status_renders_policy_block(commands_module):
+    block = commands_module.format_policy_summary(
+        group_policy="whitelist",
+        group_list=["1", "2"],
+        private_policy="all",
+        private_list=[],
+    )
+    out = commands_module.render_status({"运行开关": "开启", "语音开关": "\n" + block})
+
+    assert out.startswith("🎙️")
+    assert "语音开关" in out
+    assert "已配置 2 个群" in out
+    assert "不限会话" in out

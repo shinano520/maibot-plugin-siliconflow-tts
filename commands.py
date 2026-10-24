@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio import to_base64
+from .reply_ext import POLICY_ALL, POLICY_BLACKLIST, POLICY_WHITELIST, parse_peer_list
 
 #: 发送回调签名：(文本, stream_id) -> 是否成功
 SendText = Callable[[str, str], Awaitable[bool]]
@@ -59,7 +60,7 @@ HELP_TEXT = "\n".join(
         "/tts clone <名称> <文件名> <参考文本> — 用 voices/ 目录下的参考音频克隆音色",
         "/tts voice list — 同上，列出音色",
         "/tts voice del <名称|uri> [--force] — 删除克隆音色（正在使用的需加 --force）",
-        "/tts status — 查看配置与运行状态",
+        "/tts status — 查看配置、语音开关与运行状态",
         "/tts on — 开启语音合成",
         "/tts off — 关闭语音合成（回复保持纯文字）",
         "/tts help — 显示本帮助",
@@ -730,6 +731,36 @@ async def handle_switch(
         else "⏸️ 已关闭语音合成：回复保持纯文字（配置里的 enabled 总开关不受影响）。"
     )
     return await _reply(send_text, stream_id, message)
+
+
+def format_policy_summary(
+    *,
+    group_policy: Any,
+    group_list: Any,
+    private_policy: Any,
+    private_list: Any,
+) -> str:
+    """把群/私聊语音开关渲染成两行（只报条数，不列具体群号/QQ 号）。"""
+
+    def _line(label: str, policy: Any, ids: Any, noun: str) -> str:
+        value = str(policy or "").strip()
+        count = len(parse_peer_list(ids))
+        if value == POLICY_ALL:
+            detail = "不限会话"
+        elif value == POLICY_WHITELIST:
+            detail = f"已配置 {count} 个{noun}" if count else "名单为空，当前不会发语音"
+        elif value == POLICY_BLACKLIST:
+            detail = f"名单 {count} 个{noun}（名单外才发声）"
+        else:
+            detail = "未知策略（按白名单拒绝）"
+        return f"  {label}     {value or '(未配置)'}  {detail}"
+
+    return "\n".join(
+        (
+            _line("群聊", group_policy, group_list, "群"),
+            _line("私聊", private_policy, private_list, "用户"),
+        )
+    )
 
 
 def render_status(summary: Mapping[str, Any]) -> str:
