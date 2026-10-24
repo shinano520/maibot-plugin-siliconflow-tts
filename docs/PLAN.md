@@ -2,6 +2,8 @@
 
 > MaiBot（麦麦）接入硅基流动语音合成（TTS）的第三方插件
 > 版本 0.1（立项稿） · 2026-10-25
+> **范围更新 2026-10-25**：音色克隆（上传参考音频 → uri → `voice` 填 uri 合成）纳入本期，见 §11；
+> 接口与安全约束以 [`docs/CONTRACT.md`](CONTRACT.md) v1.2 为准。
 
 ---
 
@@ -213,7 +215,7 @@ sha256(model | voice | speed | gain | format | sample_rate | normalized_text)
 | **M0 骨架** | `_manifest.json`、`plugin.py`、`config.py`、`reply_ext.py` 空实现 | 插件能被 Runner 加载，`plugin_options` 里出现 `siliconflow_tts.voice` |
 | **M1 打通** | `provider.py` + `reply_ext.py` 真实合成 | 聊天里触发一次，收到能播放的语音消息 |
 | **M2 工程化** | `cache.py`、`text.py`、降级、重试 | 同句第二次 0 API 调用；API 挂掉时文字照常发出 |
-| **M3 可运维** | `/tts` 命令组、README、i18n、单测 | 不装 Python 也能按 README 配置成功；`pytest` 全绿 |
+| **M3 可运维** | `/tts` 命令组（含 `/tts clone`、`/tts voice rm`）、`voice.py` 音色管理、README、i18n、单测 | 不装 Python 也能按 README 配置成功；`pytest` 全绿；克隆音色能合成 |
 
 ---
 
@@ -237,8 +239,8 @@ sha256(model | voice | speed | gain | format | sample_rate | normalized_text)
 | 角色 | 职责 | 写作用域 |
 |---|---|---|
 | **architect** | 复核方案、定接口签名、review 所有 PR 级改动 | `docs/`、接口定义 |
-| **provider-dev** | `provider.py` + `cache.py` + `text.py`，含单测 | 上述三文件 + `tests/` |
-| **plugin-dev** | `plugin.py` + `config.py` + `reply_ext.py` + `audio.py` | 上述四文件 |
+| **provider-dev** | `provider.py` + `voice.py` + `cache.py` + `text.py`，含单测 | 上述四文件 + `tests/` |
+| **plugin-dev** | `plugin.py` + `config.py` + `reply_ext.py` + `audio.py` + `commands.py` | 上述五文件 |
 | **verifier** | 真实环境装插件、跑 R1–R7、出验证报告 | 只读 + 服务器操作 |
 | **docs-dev** | README、配置示例、i18n | `README.md`、`i18n/` |
 
@@ -251,18 +253,34 @@ sha256(model | voice | speed | gain | format | sample_rate | normalized_text)
 - [ ] 群里 @ 麦麦说「用语音回我」，收到可播放的语音
 - [ ] 同一句话连发 3 次，第 2、3 次无 API 调用（看日志与计费）
 - [ ] 把 `api_key` 改错，文字回复仍正常发出，只有语音缺失
-- [ ] `/tts voices` 能列出当前账号可用音色
+- [ ] `/tts voices` 能列出当前账号可用音色（含克隆音色）
+- [ ] 克隆音色可用：`/tts clone <名称> <文件名> <参考文本>` 拿到 uri → 填进 `voice` → 收到该音色的语音
+- [ ] `/tts voice rm <uri>` 删除后列表里消失；再触发语音时按失败降级为文字
+- [ ] 仓库内无真实 API key（`git grep` / `git log -p` 均无 `sk-` 长串）
 - [ ] 卸载插件后麦麦行为完全恢复原状，无报错
-- [ ] `pytest` 覆盖 provider 的错误分支、cache 命中/过期、text 切分边界
+- [ ] `pytest` 覆盖 provider 的错误分支、cache 命中/过期、text 切分边界、voice 的克隆/列表/删除
 
 ---
 
-## 11. 明确不做（本期范围外）
+## 11. 范围界定（2026-10-25 更新）
+
+### 本期做
+
+| 能力 | 说明 | 落点 |
+|---|---|---|
+| 文字转语音回复 | 已在 M1 范围 | `reply_ext.py` + `provider.py` |
+| **音色克隆** | 参考音频放 `<data_dir>/voices/` → `/tts clone <名称> <文件名> <参考文本>` → 拿 `speech:...` uri → 填进 `voice` 配置即可用该音色合成 | `voice.py`（见 CONTRACT §3.6 / §8.5–§8.7） |
+| **音色列表 / 删除** | `/tts voices`、`/tts voice rm <uri>` | `voice.py` + `commands.py` |
+
+> 克隆不新增 manifest 能力：只读 Runner 授予的 `data_dir` + 插件自己的出站 HTTP（CONTRACT §2.2）。
+
+### 本期不做
 
 - 语音识别（ASR）——麦麦已有 `enable_asr`，不重复造
-- 声音克隆（上传参考音频）——需要实名 + 文件上传，放到 v0.2
+- **读 QQ 消息里的语音附件当参考音频**——需要 `message.*` 能力与语音二进制取用，v0.2 再评估
 - 语音消息转文字再回复（双向语音对话）——v0.3 再议
 - 修改 MaiBot 本体或适配器
+- WebUI 内音频上传/试听页（需要自定义 WebUI 页面）——v0.2
 
 ---
 

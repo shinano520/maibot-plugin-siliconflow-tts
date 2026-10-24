@@ -1,13 +1,24 @@
-﻿__pycache__/
+__pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .venv/
 venv/
+
+# 运行时配置（含 api_key，绝不入库；Runner 在插件根生成）
 config.toml
+
+# 密钥与环境文件（CONTRACT §12 R5）
 .env
+.env.*
+*.key
+*.pem
+secrets/
+
+# 音频资产：生成的音频与音色参考音频
 *.mp3
 *.wav
 *.opus
+voices/
 data/
 temp/
